@@ -4,18 +4,20 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Build
-dist/
-build/
-
 # Env
 .env
 .env.*
 
-# Prisma
-prisma/dev.db
-prisma/dev.db-journal
+# Build / cache
+dist/
+build/
+*.tsbuildinfo
 
-# OS
+# Prisma generated (si tu client output está en src/generated/prisma)
+src/generated/prisma/
+
+# OS / editor
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
