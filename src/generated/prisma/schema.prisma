@@ -1,0 +1,476 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//
+// ─────────────────────────────────────
+//   ENUMS GENERALES
+// ─────────────────────────────────────
+//
+
+enum UserRole {
+  ADMIN
+  JEFE
+  LABORATORISTA
+  CALIDAD
+  AUDITOR
+}
+
+enum TestStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  NEEDS_REVIEW
+}
+
+enum AlertLevel {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum DocumentCategory {
+  PROCEDURE
+  WORK_INSTRUCTION
+  FORMAT
+  QUALITY_MANUAL
+  TECHNICAL_NORM
+  INTERNAL_POLICY
+  OTHER
+}
+
+enum DocumentStatus {
+  ACTIVE
+  OBSOLETE
+  UNDER_REVIEW
+}
+
+// Catálogo de moldes
+enum MoldStatus {
+  ACTIVE
+  OUT_OF_SERVICE
+}
+
+// Proctor
+enum ProctorStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
+enum ProctorCurveFit {
+  PARABOLA
+  LINEAR_SEGMENTS
+}
+
+//
+// ─────────────────────────────────────
+//   USUARIOS Y ROLES
+// ─────────────────────────────────────
+//
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      UserRole
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  assignedSamples   Sample[]           @relation("SampleAssignedTo")
+  auditLogs         AuditLog[]
+  createdDocuments  Document[]         @relation("DocumentCreatedBy")
+  approvedDocuments Document[]         @relation("DocumentApprovedBy")
+  testResults       TestResult[]
+  documentRevisions DocumentRevision[]
+}
+
+//
+// ─────────────────────────────────────
+//   MUESTRAS
+// ─────────────────────────────────────
+//
+
+model Sample {
+  id           Int      @id @default(autoincrement())
+  code         String   @unique
+  project      String
+  location     String?
+  materialType String
+  receivedAt   DateTime
+  receivedBy   String
+  status       String
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Asignación (opcional)
+  assignedToId Int?
+  assignedTo   User? @relation("SampleAssignedTo", fields: [assignedToId], references: [id])
+
+  // relaciones 1:1 (por muestra)
+  atterberg Atterberg?
+
+  // relaciones 1:N
+  tests          Test[]
+  granulometries Granulometry[]
+  attachments    Attachment[]
+  auditLogs      AuditLog[]
+
+  // Proctor: puede ser más de uno por muestra
+  proctors Proctor[]
+}
+
+//
+// ─────────────────────────────────────
+//   ATTERBERG (1:1 por muestra)
+// ─────────────────────────────────────
+//
+
+model Atterberg {
+  id       Int    @id @default(autoincrement())
+  sampleId Int    @unique
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  method        String? // ej: "NCh ..." / MOP
+  liquidLimit   Float? // LL
+  plasticLimit  Float? // LP (puede ser null si "NP")
+  plasticityIdx Float? // IP
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+//
+// ─────────────────────────────────────
+//   ÓRDENES DE ENSAYO
+// ─────────────────────────────────────
+//
+
+model Order {
+  id            Int      @id @default(autoincrement())
+  client        String
+  sampleType    String
+  testRequested String
+  createdAt     DateTime @default(now())
+}
+
+//
+// ─────────────────────────────────────
+//   ENSAYOS
+// ─────────────────────────────────────
+//
+
+model Test {
+  id        Int        @id @default(autoincrement())
+  sampleId  Int
+  type      String
+  norm      String?
+  status    TestStatus @default(PENDING)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  sample      Sample       @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  results     TestResult[]
+  alerts      Alert[]
+  attachments Attachment[]
+}
+
+//
+// ─────────────────────────────────────
+//   RESULTADOS DE ENSAYO
+// ─────────────────────────────────────
+//
+
+model TestResult {
+  id             Int      @id @default(autoincrement())
+  testId         Int
+  rawInputJson   Json
+  calculatedJson Json
+  isValid        Boolean  @default(true)
+  createdById    Int
+  createdAt      DateTime @default(now())
+
+  test      Test    @relation(fields: [testId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id])
+  alerts    Alert[]
+}
+
+//
+// ─────────────────────────────────────
+//   ALERTAS
+// ─────────────────────────────────────
+//
+
+model Alert {
+  id           Int        @id @default(autoincrement())
+  testId       Int?
+  testResultId Int?
+  level        AlertLevel
+  message      String
+  suggestion   String?
+  createdAt    DateTime   @default(now())
+
+  test       Test?       @relation(fields: [testId], references: [id], onDelete: Cascade)
+  testResult TestResult? @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+}
+
+//
+// ─────────────────────────────────────
+//   EVIDENCIAS / ADJUNTOS
+// ─────────────────────────────────────
+//
+
+model Attachment {
+  id         Int      @id @default(autoincrement())
+  url        String
+  type       String // photo, video, pdf, etc.
+  sampleId   Int?
+  testId     Int?
+  documentId Int?
+  uploadedAt DateTime @default(now())
+
+  sample   Sample?   @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  test     Test?     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+}
+
+//
+// ─────────────────────────────────────
+//   AUDITORÍA INTERNA
+// ─────────────────────────────────────
+//
+
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  sampleId    Int?
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id])
+  sample Sample? @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+}
+
+//
+// ─────────────────────────────────────
+//   CONTROL DOCUMENTAL
+// ─────────────────────────────────────
+//
+
+model Document {
+  id            Int              @id @default(autoincrement())
+  code          String           @unique
+  title         String
+  category      DocumentCategory
+  description   String?
+  version       String           @default("1.0")
+  status        DocumentStatus   @default(ACTIVE)
+  fileUrl       String?
+  createdById   Int
+  approvedById  Int?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  effectiveDate DateTime?
+  obsoleteDate  DateTime?
+
+  createdBy  User  @relation("DocumentCreatedBy", fields: [createdById], references: [id])
+  approvedBy User? @relation("DocumentApprovedBy", fields: [approvedById], references: [id])
+
+  revisions   DocumentRevision[]
+  attachments Attachment[]
+}
+
+model DocumentRevision {
+  id          Int      @id @default(autoincrement())
+  documentId  Int
+  version     String
+  changes     String?
+  updatedById Int
+  updatedAt   DateTime @default(now())
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  updatedBy User     @relation(fields: [updatedById], references: [id])
+}
+
+//
+// ─────────────────────────────────────
+//   GRANULOMETRÍA
+// ─────────────────────────────────────
+//
+
+model Granulometry {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  method       String?
+  totalDryMass Float
+
+  // Sobre-tamaño
+  sampleTotalMass Float?
+  tmaSpecifiedMm  Float?
+  tmaSampleMm     Float?
+  oversizeMass    Float?
+  oversizePercent Float?
+
+  // Control de cierre general
+  errorPercent Float?
+
+  notes String?
+
+  // Cálculos automáticos
+  d10       Float?
+  d30       Float?
+  d60       Float?
+  cu        Float?
+  cc        Float?
+  calcNotes String?
+
+  // QA MOP (cierre por fracción 5 mm)
+  massOver5mm_D      Float?
+  massOver5mm_Dprime Float?
+  residueOver5mm     Float?
+
+  massUnder5mm_C            Float?
+  massUnder5mm_Cprime       Float?
+  massUnder5mm_CprimeWashed Float?
+  residueUnder5mm           Float?
+
+  errorPercentOver5mm  Float?
+  errorPercentUnder5mm Float?
+  qaStatus             String?
+
+  sieves GranulometrySieve[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GranulometrySieve {
+  id             Int          @id @default(autoincrement())
+  granulometryId Int
+  granulometry   Granulometry @relation(fields: [granulometryId], references: [id], onDelete: Cascade)
+
+  order           Int
+  sieveLabel      String
+  openingMm       Float?
+  retainedMass    Float
+  percentRetained Float
+  percentPassing  Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([granulometryId])
+  @@index([order])
+}
+
+//
+// ─────────────────────────────────────
+//   PROCTOR - CATÁLOGO DE MOLDES + ENSAYO + PUNTOS
+// ─────────────────────────────────────
+//
+
+model Mold {
+  id          Int        @id @default(autoincrement())
+  code        String     @unique // ej: "MOLD-04", "PROCTOR-6IN-02"
+  description String?
+  volumeCm3   Float // volumen nominal (cm³)
+  tareMassG   Float? // masa molde (g)
+  collarMassG Float? // masa collar (g) si aplica
+  status      MoldStatus @default(ACTIVE)
+
+  // Metrología / trazabilidad
+  lastCalibrationAt  DateTime?
+  calibrationCertUrl String?
+
+  // Relaciones
+  proctorPoints ProctorPoint[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Proctor {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  // Método / norma (cliente puede pedir variantes)
+  methodCode String? // ej: "NCh1534-1", "NCh1534-2", "ASTM D698", "ASTM D1557"
+  methodName String? // texto libre para UI
+
+  // Config ensayo
+  layers        Int?
+  blowsPerLayer Int?
+  status        ProctorStatus @default(DRAFT)
+
+  // Override controlado (si después lo ocupas)
+  overrideReason String?
+  overrideById   Int?
+  overrideAt     DateTime?
+
+  // Resultados calculados
+  omcPercent    Float? // humedad óptima
+  mddDryDensity Float? // densidad seca máxima
+  curveFit      ProctorCurveFit? @default(PARABOLA)
+
+  // Gráfico
+  chartJson Json?
+  chartUrl  String?
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  points ProctorPoint[]
+
+  @@index([sampleId])
+  @@index([status])
+}
+
+model ProctorPoint {
+  id        Int     @id @default(autoincrement())
+  proctorId Int
+  proctor   Proctor @relation(fields: [proctorId], references: [id], onDelete: Cascade)
+
+  // Mold elegido por catálogo
+  moldId Int
+  mold   Mold @relation(fields: [moldId], references: [id])
+
+  order Int // 1..n
+
+  // INPUT operador
+  wetMassMoldPlusSoilG Float // masa molde + suelo húmedo (g)
+
+  // Humedad: puedes ingresar directa o por tarros
+  waterContentPercent Float?
+  tinTareG            Float?
+  tinWetG             Float?
+  tinDryG             Float?
+
+  // CALCULATED
+  wetDensity Float?
+  dryDensity Float?
+
+  qaFlags Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([proctorId, order])
+  @@index([proctorId])
+  @@index([moldId])
+}
