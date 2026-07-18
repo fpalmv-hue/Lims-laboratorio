@@ -1,4 +1,11 @@
 // src/utils/granulometryCalc.ts
+//
+// FIX (auditoría 18-jul-2026): este archivo definía N°4 = 4,75 mm (criterio
+// ASTM D422). El laboratorio certifica bajo MOP 8.102.1 (Chile), donde
+// N°4 = 5 mm. Corregido abajo. También existía un segundo motor de cálculo
+// en src/domain/granulometry/ que sí usaba 5 mm pero no estaba conectado a
+// ningún controller (código muerto) — se elimina esa carpeta por separado,
+// este archivo queda como el único motor de granulometría del proyecto.
 
 export type GranulometrySieveInput = {
   order: number;
@@ -41,7 +48,6 @@ export function semilogInterpolateD(
   const logx1 = Math.log10(x1mm);
   const logx2 = Math.log10(x2mm);
 
-  // targetY entre y1 y y2
   const t = (targetY - y1) / (y2 - y1);
   const logx = logx1 + t * (logx2 - logx1);
 
@@ -55,7 +61,6 @@ function round3(n: number) {
 }
 
 function safePct(n: number) {
-  // evita -0.000
   const r = round3(n);
   return Object.is(r, -0) ? 0 : r;
 }
@@ -63,13 +68,11 @@ function safePct(n: number) {
 export function computeDValues(
   points: Array<{ openingMm: number; percentPassing: number }>
 ): { d10: number | null; d30: number | null; d60: number | null } {
-  // puntos ordenados por openingMm DESC (tamiz grande -> pequeño)
   const sorted = [...points]
     .filter((p) => Number.isFinite(p.openingMm) && p.openingMm > 0)
     .sort((a, b) => b.openingMm - a.openingMm);
 
   const pickD = (target: number): number | null => {
-    // buscamos segmento donde targetY queda entre percentPassing[i] y percentPassing[i+1]
     for (let i = 0; i < sorted.length - 1; i++) {
       const p1 = sorted[i];
       const p2 = sorted[i + 1];
@@ -95,22 +98,22 @@ export function computeDValues(
 }
 
 /**
- * Cierre global simple (si no hay datos de fracciones MOP aún):
- * error% = |(sum(retained) - totalDryMass)| / totalDryMass * 100
+ * Cierre global simple (comparación masa total vs suma de retenidos).
+ * NOTA: esto NO es el QA por fracción que exige MOP (sobre/bajo N°4 con
+ * masas D', C'' y residuos lavados) — el schema de Prisma ya reserva campos
+ * para eso (massOver5mm_D, errorPercentOver5mm, etc.) pero no se calculan
+ * todavía. Ver ROADMAP.md, Fase 2, antes de declarar cumplimiento MOP pleno.
  */
 function calcErrorPercentGlobal(sieves: GranulometrySieveInput[], totalDryMass: number): number | null {
   if (!(totalDryMass > 0)) return null;
   const sum = sieves.reduce((acc, s) => acc + (Number.isFinite(s.retainedMass) ? s.retainedMass : 0), 0);
-  const err = Math.abs(sum - totalDryMass) / totalDryMass * 100;
-  return safePct(err);
+  const errVal = Math.abs(sum - totalDryMass) / totalDryMass * 100;
+  return safePct(errVal);
 }
 
 /**
- * QA de serie para SUELOS (MOP/NCh): exige #4, #10, #40, #200 + fondo para “classificationReady”.
- * Además:
- * - fondo debe ser último (order más alto o el último tras ordenar)
- * - openings monotónicos decrecientes según order (si están presentes)
- * - advierte tamices no estándar (ej 1/2")
+ * QA de serie para SUELOS bajo MOP 8.102.1: exige N°4 (5 mm), N°10 (2 mm),
+ * N°40 (0,5 mm) y N°200 (0,08 mm) + fondo para "classificationReady".
  */
 export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLabel: string; openingMm: number | null }>) {
   const messages: string[] = [];
@@ -135,10 +138,11 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
     return l.includes("fondo") || l.includes("residuo") || l === "pan";
   };
 
+  // MOP 8.102.1.A: N°4 = 5 mm (NO 4,75 mm — ese es criterio ASTM D422)
   const isNo4 = (label: string, mm: number | null) => {
     const l = normLabel(label);
     if (l.includes("n°4") || l.includes("no4") || l.includes("#4") || l.includes("nº4")) return true;
-    if (mm !== null && Math.abs(mm - 4.75) < 1e-6) return true;
+    if (mm !== null && Math.abs(mm - 5) < 1e-6) return true;
     return false;
   };
 
@@ -159,22 +163,19 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
   const isNo200 = (label: string, mm: number | null) => {
     const l = normLabel(label);
     if (l.includes("n°200") || l.includes("no200") || l.includes("#200") || l.includes("nº200")) return true;
-    // aceptamos 0.08 o 0.075
     if (mm !== null && (Math.abs(mm - 0.08) < 1e-6 || Math.abs(mm - 0.075) < 1e-6)) return true;
     return false;
   };
 
-  // Detecta “no estándar suelo” (ej 1/2")
+  // No estándar para la serie MOP suelos (ej: 1/2" = 12,5 mm, propio de agregados, no de esta serie)
   const isNonStandardSoil = (label: string, mm: number | null) => {
     const l = normLabel(label);
-    // 1/2" ~ 12.5 mm, suele ser agregado; en suelo MOP aparece 10 mm (3/8) en la serie
     if (l.includes('1/2"') || l.includes("1/2") || (mm !== null && Math.abs(mm - 12.5) < 1e-6)) return true;
     return false;
   };
 
   const sieves = [...inputSieves].sort((a, b) => a.order - b.order);
 
-  // duplicate order
   const seenOrder = new Set<number>();
   for (const s of sieves) {
     if (seenOrder.has(s.order)) flags.duplicateOrder = true;
@@ -182,7 +183,6 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
   }
   if (flags.duplicateOrder) messages.push("QA: Hay órdenes de tamiz duplicados (order).");
 
-  // fondo last
   const fondoIdxs = sieves.map((s, i) => (isFondo(s.sieveLabel) ? i : -1)).filter((i) => i >= 0);
   if (fondoIdxs.length > 0) {
     const lastIdx = Math.max(...fondoIdxs);
@@ -192,7 +192,6 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
     }
   }
 
-  // monotonic openings (solo para los que tienen openingMm)
   let prev: number | null = null;
   for (const s of sieves) {
     if (typeof s.openingMm === "number") {
@@ -207,7 +206,6 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
     messages.push("QA: Aberturas (openingMm) no son monotónicas decrecientes según order.");
   }
 
-  // presencia de #4 #10 #40 #200
   const has4 = sieves.some((s) => isNo4(s.sieveLabel, s.openingMm));
   const has10 = sieves.some((s) => isNo10(s.sieveLabel, s.openingMm));
   const has40 = sieves.some((s) => isNo40(s.sieveLabel, s.openingMm));
@@ -220,25 +218,18 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
 
   flags.missingFineSeries = !(has10 && has40 && has200);
 
-  if (flags.missingNo4) messages.push("QA: Falta tamiz N°4 (4,75 mm).");
+  if (flags.missingNo4) messages.push("QA: Falta tamiz N°4 (5,00 mm, serie MOP 8.102.1).");
   if (flags.missingNo10) messages.push("QA: Falta tamiz N°10 (2,00 mm).");
   if (flags.missingNo40) messages.push("QA: Falta tamiz N°40 (0,50 mm).");
-  if (flags.missingNo200) messages.push("QA: Falta tamiz N°200 (0,08/0,075 mm). Sin él no se puede clasificar USCS por granulometría.");
+  if (flags.missingNo200) messages.push("QA: Falta tamiz N°200 (0,08 mm). Sin él no se puede clasificar USCS por granulometría.");
 
-  // tamices no estándar
   const nonStd = sieves.filter((s) => isNonStandardSoil(s.sieveLabel, s.openingMm));
   if (nonStd.length > 0) {
     flags.hasNonStandardSoilSieves = true;
-    messages.push('QA: Se detectó tamiz "1/2\\" (12,5 mm)", no estándar para suelos en serie MOP/NCh (en suelos se usa 10 mm = 3/8"). Se mantiene para curva, pero se excluye del dataset "curve" estándar.');
+    messages.push('QA: Se detectó tamiz "1/2\\" (12,5 mm)", no estándar para suelos en serie MOP 8.102.1 (en suelos se usa 10 mm = 3/8"). Se mantiene para curva, pero se excluye del dataset "curve" estándar.');
   }
 
-  // key duplicates (#4/#10/#40/#200 detectados más de 1 vez)
-  const countKey = {
-    no4: 0,
-    no10: 0,
-    no40: 0,
-    no200: 0,
-  };
+  const countKey = { no4: 0, no10: 0, no40: 0, no200: 0 };
   for (const s of sieves) {
     if (isNo4(s.sieveLabel, s.openingMm)) countKey.no4++;
     if (isNo10(s.sieveLabel, s.openingMm)) countKey.no10++;
@@ -252,21 +243,12 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
 
   const classificationReady = has4 && has10 && has40 && has200 && !flags.duplicateKeySieve && !flags.duplicateOrder;
 
-  // status
   let status: "OK" | "WARNING" | "NO_CONFORME" = "OK";
   if (!classificationReady || flags.fondoNotLast || flags.nonMonotonicOpenings || flags.duplicateOrder) status = "WARNING";
-  // si quieres endurecer a NO_CONFORME por algo específico, lo dejamos listo:
-  // if (flags.duplicateOrder) status = "NO_CONFORME";
 
   return { status, classificationReady, flags, messages };
 }
 
-/**
- * Arma dataset para curva semilog.
- * - Por defecto devuelve SOLO tamices estándar suelo (#4/#10/#40/#200 + los grandes de la serie si vienen en mm).
- * - Excluye fondo (openingMm null).
- * - Excluye 1/2" (12.5 mm) por regla suelo (queda como dato guardado igual).
- */
 export function buildSoilCurveDataset(
   sieves: Array<{ order: number; sieveLabel: string; openingMm: number | null; percentPassing: number }>
 ) {
@@ -299,7 +281,6 @@ export function calculateGranulometry(
 ): GranulometryCalcResult {
   const sieves = [...sievesInput].sort((a, b) => a.order - b.order);
 
-  // % retenido y % pasa
   let cumulative = 0;
   const computed: GranulometryCalculatedSieve[] = sieves.map((s) => {
     const pr = (s.retainedMass / totalDryMass) * 100;
@@ -312,7 +293,6 @@ export function calculateGranulometry(
     };
   });
 
-  // puntos para Dx (solo con openingMm numérico y excluye fondo)
   const points = sieves
     .map((s) => {
       const calc = computed.find((c) => c.order === s.order);
@@ -334,13 +314,15 @@ export function calculateGranulometry(
     cc = (d30 * d30) / (d10 * d60);
   }
 
-  // error global
   const errorPercent = calcErrorPercentGlobal(sievesInput, totalDryMass);
 
-  // notas base (puedes extender en controller si quieres)
-  let calcNotes = "Dx por interpolación semi-log (X=log(mm), Y=% pasa)";
+  // FIX: el mensaje anterior declaraba "aceptable según tolerancia MOP / ISO
+  // 17025" de forma incondicional — esto es solo un cierre de masa GLOBAL,
+  // no el QA por fracción que exige MOP. Se deja explícito para no
+  // sobre-declarar cumplimiento normativo en un certificado.
+  let calcNotes = "Dx por interpolación semi-log (X=log(mm), Y=% pasa). Serie MOP 8.102.1.";
   if (errorPercent !== null) {
-    calcNotes = `Cierre de masa = ${errorPercent.toFixed(2)} %. Ensayo aceptable según tolerancia MOP / ISO 17025.`;
+    calcNotes = `Cierre de masa global = ${errorPercent.toFixed(2)} %. Este es un control de cierre total, no reemplaza el QA por fracción (sobre/bajo N°4) que exige MOP 8.102.1 — ver ROADMAP.md Fase 2.`;
   }
 
   return {
