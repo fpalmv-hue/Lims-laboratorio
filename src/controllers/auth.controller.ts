@@ -3,10 +3,9 @@ import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../prismaClient";
+import { JWT_SECRET } from "../config/env";
 
-const JWT_SECRET = process.env.JWT_SECRET ?? "DEV_SUPER_SECRET_KEY";
 const JWT_EXPIRES_IN = "8h";
-
 
 export const login = async (req: Request, res: Response) => {
   try {
@@ -58,7 +57,7 @@ export const login = async (req: Request, res: Response) => {
     console.error("Error en login:", error);
     return res.status(500).json({
       message: "Error en login",
-      error,
     });
   }
 };
+
