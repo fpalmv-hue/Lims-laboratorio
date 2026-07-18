@@ -22,9 +22,6 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/api", atterbergRoutes);
-app.use("/api/molds", moldsRoutes);
-app.use("/api/proctors", proctorRoutes);
 
 // ✅ Ruta pública de salud
 app.get("/health", (req, res) => {
@@ -37,7 +34,10 @@ app.get("/health", (req, res) => {
 // ✅ Rutas públicas (no requieren token)
 app.use("/auth", authRoutes); // /auth/login, etc.
 
-// ✅ A partir de aquí TODO requiere estar autenticado
+// ✅ A partir de aquí TODO requiere estar autenticado.
+// IMPORTANTE: en Express, un middleware solo protege las rutas montadas
+// DESPUÉS de él. Todo lo que necesite requireAuth debe ir después de esta
+// línea, sin excepción.
 app.use(requireAuth);
 
 // ✅ RUTAS PROTEGIDAS
@@ -47,7 +47,10 @@ app.use("/orders", ordersRoutes);
 app.use("/samples", samplesRoutes);
 app.use("/tests", testRoutes);
 app.use("/test-results", testResultsRoutes);
-app.use("/granulometries", granulometryRoutes); // nueva ruta granulometría
+app.use("/granulometries", granulometryRoutes);
+app.use("/api", atterbergRoutes);
+app.use("/api/molds", moldsRoutes);
+app.use("/api/proctors", proctorRoutes);
 
 // Inicio de servidor
 app.listen(PORT, () => {
