@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "create-admin": "ts-node src/scripts/createAdmin.ts"
+    "create-admin": "ts-node src/scripts/createAdmin.ts",
+    "check": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",

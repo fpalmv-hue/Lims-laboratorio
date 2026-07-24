@@ -13,8 +13,8 @@ export async function listMolds(req: Request, res: Response) {
     });
 
     return res.status(200).json({ message: "OK", data: molds });
-  } catch (err: any) {
+ } catch (err: any) {
     console.error(err);
-    return res.status(500).json({ message: "Error interno", error: String(err?.message ?? err) });
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }

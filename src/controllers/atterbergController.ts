@@ -66,7 +66,7 @@ export async function createAtterberg(req: Request, res: Response) {
     return res.status(201).json({ message: "Atterberg creado", data: created });
   } catch (err: any) {
     console.error(err);
-    return res.status(500).json({ message: "Error interno", error: String(err?.message ?? err) });
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -127,7 +127,7 @@ export async function upsertAtterberg(req: Request, res: Response) {
     return res.status(200).json({ message: "Atterberg guardado", data: saved });
   } catch (err: any) {
     console.error(err);
-    return res.status(500).json({ message: "Error interno", error: String(err?.message ?? err) });
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -147,6 +147,6 @@ export async function getAtterbergBySample(req: Request, res: Response) {
     return res.status(200).json({ message: "OK", data: atterberg });
   } catch (err: any) {
     console.error(err);
-    return res.status(500).json({ message: "Error interno", error: String(err?.message ?? err) });
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }

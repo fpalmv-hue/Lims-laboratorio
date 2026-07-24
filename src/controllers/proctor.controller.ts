@@ -23,7 +23,8 @@ export async function createProctor(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -36,7 +37,8 @@ export async function getProctorById(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -49,7 +51,8 @@ export async function listProctorsBySample(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -65,7 +68,8 @@ export async function addProctorPoint(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -78,7 +82,8 @@ export async function listProctorPoints(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
@@ -91,6 +96,7 @@ export async function recalculateProctor(req: Request, res: Response) {
     }
     return res.json({ message: "OK", data: (out as any).data });
   } catch (err: any) {
-    return res.status(500).json({ message: "Error", error: String(err?.message ?? err) });
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
