@@ -1,3 +1,4 @@
+// ⚠️ AUDITORÍA 24-jul-2026: ESTE ARCHIVO NO ESTÁ CONECTADO A NINGÚN CONTROLLER NI RUTA. // Es código huérfano (probablemente un intento anterior de motor de cálculo). // El motor real y en uso hoy es src/utils/granulometryCalc.ts (importado por // granulometry.controller.ts). NO lo importes en código nuevo sin antes // confirmar con el equipo — algunos valores aquí (ej. tolerancia N°4 en // 4.75mm) contradicen el criterio MOP 8.102.1 (N°4 = 5mm) ya corregido en // granulometryCalc.ts. Ver PROJECT_BRIEF.md sección 4.
 // src/utils/granulometryMassQa.ts
 // QA de cierre de masa por fracción según MOP 8.102.1 §5.10 (junio 2022)
 // - Sobre 5 mm: <= 0,5 % (respecto de D')
