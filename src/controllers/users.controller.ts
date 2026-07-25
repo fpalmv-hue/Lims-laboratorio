@@ -25,8 +25,7 @@ export const getUsers = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error fetching users:", error);
     return res.status(500).json({
-      message: "Error fetching users",
-      error,
+      message: "Error interno del servidor",
     });
   }
 };
@@ -67,8 +66,7 @@ export const getUserById = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error fetching user:", error);
     return res.status(500).json({
-      message: "Error fetching user",
-      error,
+      message: "Error interno del servidor",
     });
   }
 };
@@ -125,11 +123,10 @@ export const createUser = async (req: Request, res: Response) => {
       message: "User created successfully",
       data: newUser,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error creating user:", error);
     return res.status(500).json({
-      message: "Error creating user",
-      error: error.meta ?? error.message ?? error,
+      message: "Error interno del servidor",
     });
   }
 };
@@ -176,11 +173,10 @@ export const updateUserRole = async (req: Request, res: Response) => {
       message: "User role updated successfully",
       data: updatedUser,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error updating user role:", error);
     return res.status(500).json({
-      message: "Error updating user role",
-      error: error.meta ?? error.message ?? error,
+      message: "Error interno del servidor",
     });
   }
 };
