@@ -123,7 +123,6 @@ model Sample {
   tests          Test[]
   granulometries Granulometry[]
   attachments    Attachment[]
-  auditLogs      AuditLog[]
 
   // Proctor: puede ser más de uno por muestra
   proctors Proctor[]
@@ -250,16 +249,33 @@ model Attachment {
 // ─────────────────────────────────────
 //
 
-model AuditLog {
-  id          Int      @id @default(autoincrement())
-  userId      Int
-  sampleId    Int?
-  action      String
-  description String?
-  createdAt   DateTime @default(now())
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  CALIBRATE
+  ROLE_CHANGE
+  LOGIN
+  OTHER
+}
 
-  user   User    @relation(fields: [userId], references: [id])
-  sample Sample? @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+model AuditLog {
+  id            Int         @id @default(autoincrement())
+  userId        Int
+  action        AuditAction
+  entityType    String
+  entityId      Int
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+  createdAt     DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 //
