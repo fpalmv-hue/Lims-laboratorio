@@ -1,10 +1,12 @@
 // src/controllers/users.controller.ts
-import { Request, Response } from "express";
+import { Response } from "express";
 import bcrypt from "bcryptjs";
 import prisma from "../prismaClient";
+import { AuthRequest } from "../middlewares/auth";
+import { registerAudit } from "../utils/auditLog";
 
 // GET /users - listar usuarios (sin password)
-export const getUsers = async (req: Request, res: Response) => {
+export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
     const users = await prisma.user.findMany({
       orderBy: { id: "asc" },
@@ -31,7 +33,7 @@ export const getUsers = async (req: Request, res: Response) => {
 };
 
 // GET /users/:id - detalle (sin password)
-export const getUserById = async (req: Request, res: Response) => {
+export const getUserById = async (req: AuthRequest, res: Response) => {
   try {
     const userId = Number(req.params.id);
 
@@ -72,7 +74,7 @@ export const getUserById = async (req: Request, res: Response) => {
 };
 
 // POST /users - crear usuario (admin, jefe, etc.)
-export const createUser = async (req: Request, res: Response) => {
+export const createUser = async (req: AuthRequest, res: Response) => {
   try {
     const { name, email, password, role } = req.body;
 
@@ -82,7 +84,6 @@ export const createUser = async (req: Request, res: Response) => {
       });
     }
 
-    // Validación simple del rol (opcional)
     const validRoles = ["ADMIN", "JEFE", "LABORATORISTA", "CALIDAD", "AUDITOR"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
@@ -119,6 +120,19 @@ export const createUser = async (req: Request, res: Response) => {
       },
     });
 
+    // Trazabilidad ISO 17025: registrar la creación del usuario.
+    // req.user siempre existe acá porque esta ruta está detrás de requireAuth.
+    if (req.user) {
+      await registerAudit({
+        userId: req.user.id,
+        action: "CREATE",
+        entityType: "User",
+        entityId: newUser.id,
+        previousValue: null,
+        newValue: newUser,
+      });
+    }
+
     return res.status(201).json({
       message: "User created successfully",
       data: newUser,
@@ -132,10 +146,10 @@ export const createUser = async (req: Request, res: Response) => {
 };
 
 // PATCH /users/:id/role - actualizar rol
-export const updateUserRole = async (req: Request, res: Response) => {
+export const updateUserRole = async (req: AuthRequest, res: Response) => {
   try {
     const userId = Number(req.params.id);
-    const { role } = req.body;
+    const { role, reason } = req.body;
 
     if (isNaN(userId)) {
       return res.status(400).json({
@@ -156,6 +170,25 @@ export const updateUserRole = async (req: Request, res: Response) => {
       });
     }
 
+    // Capturamos el estado ANTES de modificar, para el AuditLog.
+    const before = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!before) {
+      return res.status(404).json({
+        message: `User with ID ${userId} not found`,
+      });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: userId },
       data: { role },
@@ -168,6 +201,22 @@ export const updateUserRole = async (req: Request, res: Response) => {
         updatedAt: true,
       },
     });
+
+    // Trazabilidad ISO 17025: registrar el cambio de rol con valor
+    // anterior y nuevo. El motivo (reason) es opcional por ahora a nivel
+    // de validación -- la regla de "obligatorio si ya estaba aprobado"
+    // se implementa cuando conectemos esto a resultados de ensayo.
+    if (req.user) {
+      await registerAudit({
+        userId: req.user.id,
+        action: "ROLE_CHANGE",
+        entityType: "User",
+        entityId: updatedUser.id,
+        previousValue: before,
+        newValue: updatedUser,
+        reason,
+      });
+    }
 
     return res.json({
       message: "User role updated successfully",
