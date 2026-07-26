@@ -3,6 +3,7 @@
 import { Request, Response } from "express";
 import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
+import { registerAudit } from "../utils/auditLog";
 
 // ----------------------------------------------------
 // Crear resultado de ensayo
@@ -42,6 +43,16 @@ export const createTestResult = async (req: AuthRequest, res: Response) => {
         isValid: false,
         createdById: userId,
       },
+    });
+
+    // Trazabilidad ISO 17025: registrar la creación del resultado.
+    await registerAudit({
+      userId,
+      action: "CREATE",
+      entityType: "TestResult",
+      entityId: result.id,
+      previousValue: null,
+      newValue: result,
     });
 
     return res
@@ -107,15 +118,21 @@ export const getTestResultById = async (req: Request, res: Response) => {
 // Actualizar resultado
 // PUT /test-results/:id
 // ----------------------------------------------------
-export const updateTestResult = async (req: Request, res: Response) => {
+export const updateTestResult = async (req: AuthRequest, res: Response) => {
   try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
     const id = Number(req.params.id);
 
     if (Number.isNaN(id)) {
       return res.status(400).json({ message: "ID inválido" });
     }
 
-    const { rawInputJson, calculatedJson, isValid } = req.body;
+    const { rawInputJson, calculatedJson, isValid, reason } = req.body;
 
     const dataToUpdate: any = {};
 
@@ -123,9 +140,30 @@ export const updateTestResult = async (req: Request, res: Response) => {
     if (calculatedJson !== undefined) dataToUpdate.calculatedJson = calculatedJson;
     if (isValid !== undefined) dataToUpdate.isValid = isValid;
 
+    // Capturamos el estado ANTES de modificar, para el AuditLog.
+    const before = await prisma.testResult.findUnique({ where: { id } });
+
+    if (!before) {
+      return res.status(404).json({ message: "Resultado no encontrado" });
+    }
+
     const updated = await prisma.testResult.update({
       where: { id },
       data: dataToUpdate,
+    });
+
+    // Trazabilidad ISO 17025: registrar el cambio con valor anterior y
+    // nuevo. reason es opcional por ahora a nivel de validación -- este
+    // es el candidato natural para la regla futura "reason obligatorio
+    // si isValid ya era true antes del cambio" (pendiente de decidir).
+    await registerAudit({
+      userId,
+      action: "UPDATE",
+      entityType: "TestResult",
+      entityId: updated.id,
+      previousValue: before,
+      newValue: updated,
+      reason,
     });
 
     return res.json({
@@ -137,4 +175,3 @@ export const updateTestResult = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
-
