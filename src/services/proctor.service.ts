@@ -11,9 +11,14 @@
 // Convención de retorno: cada función devuelve { data } en éxito o
 // { error: { status, message } } en fallo, que es lo que el controller
 // ya sabe interpretar.
+//
+// Trazabilidad ISO 17025: las funciones que escriben en la base (create,
+// addPoint, recalculate) reciben userId y llaman a registerAudit() luego
+// de la escritura.
 
 import prisma from "../prismaClient";
 import { calculateProctorFromDb } from "../utils/proctorCalc";
+import { registerAudit } from "../utils/auditLog";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -41,6 +46,7 @@ export async function createProctorService(params: {
     blowsPerLayer?: number | null;
     notes?: string | null;
   };
+  userId: number;
 }): Promise<ServiceResult<any>> {
   const sampleId = parseId(params.sampleIdRaw, "sampleId");
   if (!sampleId) return err(400, "sampleId es obligatorio y debe ser numérico.");
@@ -61,6 +67,16 @@ export async function createProctorService(params: {
       status: "DRAFT",
       curveFit: "PARABOLA",
     },
+  });
+
+  // Trazabilidad ISO 17025: registrar la creación del Proctor.
+  await registerAudit({
+    userId: params.userId,
+    action: "CREATE",
+    entityType: "Proctor",
+    entityId: proctor.id,
+    previousValue: null,
+    newValue: proctor,
   });
 
   return { data: proctor };
@@ -115,6 +131,7 @@ export async function addProctorPointService(params: {
     wetMassMoldPlusSoilG: number;
     waterContentPercent: number;
   };
+  userId: number;
 }): Promise<ServiceResult<any>> {
   const proctorId = parseId(params.proctorIdRaw, "id");
   if (!proctorId) return err(400, "id de proctor inválido.");
@@ -154,6 +171,16 @@ export async function addProctorPointService(params: {
     },
   });
 
+  // Trazabilidad ISO 17025: registrar la creación del punto Proctor.
+  await registerAudit({
+    userId: params.userId,
+    action: "CREATE",
+    entityType: "ProctorPoint",
+    entityId: point.id,
+    previousValue: null,
+    newValue: point,
+  });
+
   return { data: point };
 }
 
@@ -182,7 +209,8 @@ export async function listProctorPointsService(
 // POST /api/proctors/:id/recalculate
 // ---------------------------------------------------------------------
 export async function recalculateProctorService(
-  proctorIdRaw: unknown
+  proctorIdRaw: unknown,
+  userId: number
 ): Promise<ServiceResult<any>> {
   const proctorId = parseId(proctorIdRaw, "id");
   if (!proctorId) return err(400, "id de proctor inválido.");
@@ -199,6 +227,17 @@ export async function recalculateProctorService(
       mddDryDensity: calc.mddDryDensity,
       chartJson: calc.chartJson as any,
     },
+  });
+
+  // Trazabilidad ISO 17025: registrar el recálculo (OMC/MDD nuevos vs.
+  // los que tenía antes el registro).
+  await registerAudit({
+    userId,
+    action: "UPDATE",
+    entityType: "Proctor",
+    entityId: updated.id,
+    previousValue: existing,
+    newValue: updated,
   });
 
   return { data: { proctor: updated, calc } };

@@ -1,5 +1,6 @@
 // src/controllers/proctor.controller.ts
-import type { Request, Response } from "express";
+import type { Response } from "express";
+import { AuthRequest } from "../middlewares/auth";
 import {
   addProctorPointService,
   createProctorService,
@@ -9,14 +10,19 @@ import {
   recalculateProctorService,
 } from "../services/proctor.service";
 
-export async function createProctor(req: Request, res: Response) {
+export async function createProctor(req: AuthRequest, res: Response) {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
     // ✅ acepta sampleId por URL params o por body
     //   - POST /api/proctors/sample/:sampleId  -> params
     //   - POST /api/proctors                  -> body
     const sampleIdRaw = req.params.sampleId ?? req.body.sampleId;
 
-    const out = await createProctorService({ sampleIdRaw, body: req.body });
+    const out = await createProctorService({ sampleIdRaw, body: req.body, userId });
     if ((out as any).error) {
       const e = (out as any).error;
       return res.status(e.status).json({ message: e.message });
@@ -28,7 +34,7 @@ export async function createProctor(req: Request, res: Response) {
   }
 }
 
-export async function getProctorById(req: Request, res: Response) {
+export async function getProctorById(req: AuthRequest, res: Response) {
   try {
     const out = await getProctorByIdService(req.params.id);
     if ((out as any).error) {
@@ -42,7 +48,7 @@ export async function getProctorById(req: Request, res: Response) {
   }
 }
 
-export async function listProctorsBySample(req: Request, res: Response) {
+export async function listProctorsBySample(req: AuthRequest, res: Response) {
   try {
     const out = await listProctorsBySampleService(req.params.sampleId);
     if ((out as any).error) {
@@ -56,11 +62,17 @@ export async function listProctorsBySample(req: Request, res: Response) {
   }
 }
 
-export async function addProctorPoint(req: Request, res: Response) {
+export async function addProctorPoint(req: AuthRequest, res: Response) {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
     const out = await addProctorPointService({
       proctorIdRaw: req.params.id,
       body: req.body,
+      userId,
     });
     if ((out as any).error) {
       const e = (out as any).error;
@@ -73,7 +85,7 @@ export async function addProctorPoint(req: Request, res: Response) {
   }
 }
 
-export async function listProctorPoints(req: Request, res: Response) {
+export async function listProctorPoints(req: AuthRequest, res: Response) {
   try {
     const out = await listProctorPointsService(req.params.id);
     if ((out as any).error) {
@@ -87,9 +99,14 @@ export async function listProctorPoints(req: Request, res: Response) {
   }
 }
 
-export async function recalculateProctor(req: Request, res: Response) {
+export async function recalculateProctor(req: AuthRequest, res: Response) {
   try {
-    const out = await recalculateProctorService(req.params.id);
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
+    const out = await recalculateProctorService(req.params.id, userId);
     if ((out as any).error) {
       const e = (out as any).error;
       return res.status(e.status).json({ message: e.message });
