@@ -1,7 +1,7 @@
-import { Request, Response } from "express";
-import { PrismaClient } from "../generated/prisma";
-
-const prisma = new PrismaClient();
+import { Response } from "express";
+import prisma from "../prismaClient";
+import { AuthRequest } from "../middlewares/auth";
+import { registerAudit } from "../utils/auditLog";
 
 function toNumberOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -20,7 +20,7 @@ function calcIP(ll: number | null, lp: number | null): number | null {
  * POST /api/samples/:sampleId/atterberg
  * Crea (si no existe) el Atterberg de la muestra (relación 1:1)
  */
-export async function createAtterberg(req: Request, res: Response) {
+export async function createAtterberg(req: AuthRequest, res: Response) {
   try {
     const sampleId = Number(req.params.sampleId);
     if (!Number.isFinite(sampleId)) {
@@ -63,6 +63,18 @@ export async function createAtterberg(req: Request, res: Response) {
       },
     });
 
+    // Trazabilidad ISO 17025: registrar la creación del Atterberg.
+    if (req.user) {
+      await registerAudit({
+        userId: req.user.id,
+        action: "CREATE",
+        entityType: "Atterberg",
+        entityId: created.id,
+        previousValue: null,
+        newValue: created,
+      });
+    }
+
     return res.status(201).json({ message: "Atterberg creado", data: created });
   } catch (err: any) {
     console.error(err);
@@ -74,7 +86,7 @@ export async function createAtterberg(req: Request, res: Response) {
  * PUT /api/samples/:sampleId/atterberg
  * Upsert (crea o actualiza) el Atterberg de la muestra.
  */
-export async function upsertAtterberg(req: Request, res: Response) {
+export async function upsertAtterberg(req: AuthRequest, res: Response) {
   try {
     const sampleId = Number(req.params.sampleId);
     if (!Number.isFinite(sampleId)) {
@@ -124,6 +136,20 @@ export async function upsertAtterberg(req: Request, res: Response) {
       },
     });
 
+    // Trazabilidad ISO 17025: registrar CREATE si no existía antes
+    // (current === null), o UPDATE con el estado previo si ya existía.
+    if (req.user) {
+      await registerAudit({
+        userId: req.user.id,
+        action: current ? "UPDATE" : "CREATE",
+        entityType: "Atterberg",
+        entityId: saved.id,
+        previousValue: current,
+        newValue: saved,
+        reason: req.body.reason,
+      });
+    }
+
     return res.status(200).json({ message: "Atterberg guardado", data: saved });
   } catch (err: any) {
     console.error(err);
@@ -134,7 +160,7 @@ export async function upsertAtterberg(req: Request, res: Response) {
 /**
  * GET /api/samples/:sampleId/atterberg
  */
-export async function getAtterbergBySample(req: Request, res: Response) {
+export async function getAtterbergBySample(req: AuthRequest, res: Response) {
   try {
     const sampleId = Number(req.params.sampleId);
     if (!Number.isFinite(sampleId)) {
