@@ -1,11 +1,18 @@
-// src/controllers/tests.controller.ts
-import { Request, Response } from "express";
+// src/controllers/test.controller.ts
+import { Response } from "express";
 import prisma from "../prismaClient";
+import { AuthRequest } from "../middlewares/auth";
+import { registerAudit } from "../utils/auditLog";
 
 // POST /tests
 // Crea un ensayo asociado a una muestra
-export const createTest = async (req: Request, res: Response) => {
+export const createTest = async (req: AuthRequest, res: Response) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
     const { sampleId, type, norm, status } = req.body;
 
     if (!sampleId || !type) {
@@ -32,6 +39,16 @@ export const createTest = async (req: Request, res: Response) => {
       },
     });
 
+    // Trazabilidad ISO 17025: registrar la creación del ensayo.
+    await registerAudit({
+      userId,
+      action: "CREATE",
+      entityType: "Test",
+      entityId: test.id,
+      previousValue: null,
+      newValue: test,
+    });
+
     return res.status(201).json({
       message: "Ensayo creado",
       data: test,
@@ -44,7 +61,7 @@ export const createTest = async (req: Request, res: Response) => {
 
 // GET /tests
 // Permite listar ensayos, opcionalmente filtrando por sampleId
-export const listTests = async (req: Request, res: Response) => {
+export const listTests = async (req: AuthRequest, res: Response) => {
   try {
     const { sampleId } = req.query;
 
@@ -79,7 +96,7 @@ export const listTests = async (req: Request, res: Response) => {
 };
 
 // GET /tests/:id
-export const getTestById = async (req: Request, res: Response) => {
+export const getTestById = async (req: AuthRequest, res: Response) => {
   try {
     const id = Number(req.params.id);
 
@@ -112,10 +129,15 @@ export const getTestById = async (req: Request, res: Response) => {
 };
 
 // PUT /tests/:id
-export const updateTest = async (req: Request, res: Response) => {
+export const updateTest = async (req: AuthRequest, res: Response) => {
   try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
     const id = Number(req.params.id);
-    const { type, norm, status } = req.body;
+    const { type, norm, status, reason } = req.body;
 
     const existing = await prisma.test.findUnique({ where: { id } });
 
@@ -130,6 +152,17 @@ export const updateTest = async (req: Request, res: Response) => {
         norm: norm ?? existing.norm,
         status: status ?? existing.status,
       },
+    });
+
+    // Trazabilidad ISO 17025: registrar el cambio con valor anterior y nuevo.
+    await registerAudit({
+      userId,
+      action: "UPDATE",
+      entityType: "Test",
+      entityId: updated.id,
+      previousValue: existing,
+      newValue: updated,
+      reason,
     });
 
     return res.json({
