@@ -96,18 +96,22 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
     const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
     if (!sample) return res.status(404).json({ message: "Sample no existe" });
 
-    const method = req.body.method ?? null;
     const ll = toNumberOrNull(req.body.liquidLimit);
     const lp = toNumberOrNull(req.body.plasticLimit); // null = NP
-    const notes = req.body.notes ?? null;
 
-    // En PUT permitimos que no venga LL/LP si quieres solo editar method/notes,
-    // pero para recalcular IP necesitamos valores finales.
+    // En PUT permitimos que no venga LL/LP/method/notes si solo quieres
+    // editar algunos campos -- cada campo omitido cae de vuelta al valor
+    // ya guardado (current), en vez de sobreescribirse con null.
     const current = await prisma.atterberg.findUnique({ where: { sampleId } });
 
     const finalLL = ll !== null ? ll : current?.liquidLimit ?? null;
     const finalLP = (req.body.plasticLimit !== undefined) ? lp : (current?.plasticLimit ?? null);
     // Nota: si envías plasticLimit: null => queda NP intencionalmente
+
+    const finalMethod = (req.body.method !== undefined) ? req.body.method : (current?.method ?? null);
+    const finalNotes = (req.body.notes !== undefined) ? req.body.notes : (current?.notes ?? null);
+    // Mismo criterio: enviar method/notes explícitamente en null SÍ los borra
+    // a propósito; omitirlos del body preserva lo que ya había guardado.
 
     if (finalLL === null) {
       return res.status(400).json({
@@ -121,18 +125,18 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
       where: { sampleId },
       create: {
         sampleId,
-        method,
+        method: finalMethod,
         liquidLimit: finalLL,
         plasticLimit: finalLP,
         plasticityIdx: ip,
-        notes,
+        notes: finalNotes,
       },
       update: {
-        method,
+        method: finalMethod,
         liquidLimit: finalLL,
         plasticLimit: finalLP,
         plasticityIdx: ip,
-        notes,
+        notes: finalNotes,
       },
     });
 
