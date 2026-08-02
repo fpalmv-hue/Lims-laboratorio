@@ -139,30 +139,38 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
   };
 
   // MOP 8.102.1.A: N°4 = 5 mm (NO 4,75 mm — ese es criterio ASTM D422)
+  // FIX (auditoria 01-ago-2026): los datos reales guardan sieveLabel en
+  // formato "pelado" (N4, N10, N40, N200 — sin simbolo ° ni letra "o" de
+  // "No"), que no matcheaba ningun patron de texto existente. Ademas el
+  // fallback numerico de N°40 comparaba contra 0.5 mm en vez del valor
+  // normado correcto (0.425 mm), causando falso positivo "falta N°40"
+  // aunque el tamiz estuviera presente. Se agrega igualdad EXACTA (no
+  // "includes", para no confundir N4 con N40) sobre el formato pelado,
+  // y se corrige el umbral numerico de N°40.
   const isNo4 = (label: string, mm: number | null) => {
     const l = normLabel(label);
-    if (l.includes("n°4") || l.includes("no4") || l.includes("#4") || l.includes("nº4")) return true;
+    if (l === "n4" || l.includes("n°4") || l.includes("no4") || l.includes("#4") || l.includes("nº4")) return true;
     if (mm !== null && Math.abs(mm - 5) < 1e-6) return true;
     return false;
   };
 
   const isNo10 = (label: string, mm: number | null) => {
     const l = normLabel(label);
-    if (l.includes("n°10") || l.includes("no10") || l.includes("#10") || l.includes("nº10")) return true;
+    if (l === "n10" || l.includes("n°10") || l.includes("no10") || l.includes("#10") || l.includes("nº10")) return true;
     if (mm !== null && Math.abs(mm - 2.0) < 1e-6) return true;
     return false;
   };
 
   const isNo40 = (label: string, mm: number | null) => {
     const l = normLabel(label);
-    if (l.includes("n°40") || l.includes("no40") || l.includes("#40") || l.includes("nº40")) return true;
-    if (mm !== null && Math.abs(mm - 0.5) < 1e-6) return true;
+    if (l === "n40" || l.includes("n°40") || l.includes("no40") || l.includes("#40") || l.includes("nº40")) return true;
+    if (mm !== null && Math.abs(mm - 0.425) < 1e-6) return true;
     return false;
   };
 
   const isNo200 = (label: string, mm: number | null) => {
     const l = normLabel(label);
-    if (l.includes("n°200") || l.includes("no200") || l.includes("#200") || l.includes("nº200")) return true;
+    if (l === "n200" || l.includes("n°200") || l.includes("no200") || l.includes("#200") || l.includes("nº200")) return true;
     if (mm !== null && (Math.abs(mm - 0.08) < 1e-6 || Math.abs(mm - 0.075) < 1e-6)) return true;
     return false;
   };
