@@ -10,7 +10,6 @@ import authRoutes from "./routes/auth.routes";
 import testRoutes from "./routes/test.routes";
 import testResultsRoutes from "./routes/testResults.routes";
 import granulometryRoutes from "./routes/granulometry.routes";
-import atterbergRoutes from "./routes/atterbergRoutes";
 import { requireAuth } from "./middlewares/auth";
 import moldsRoutes from "./routes/molds.routes";
 import proctorRoutes from "./routes/proctor.routes";
@@ -62,7 +61,12 @@ app.use("/api/samples", samplesRoutes);
 app.use("/api/tests", testRoutes);
 app.use("/api/test-results", testResultsRoutes);
 app.use("/api/granulometries", granulometryRoutes);
-app.use("/api", atterbergRoutes); // /api/samples/:sampleId/atterberg
+// Atterberg NO tiene router propio: vive dentro de samples.routes.ts
+// (GET/PUT/approve bajo /api/samples/:sampleId/atterberg). Existio un
+// atterbergRoutes.ts separado, montado aqui mismo, cuyas rutas GET/PUT
+// quedaban shadowed por samples.routes.ts pero cuyo POST si era alcanzable
+// (via createAtterberg) -- una via de creacion redundante y no intencional.
+// Eliminado el 02-ago-2026 para dejar un unico camino de escritura.
 app.use("/api/molds", moldsRoutes);
 app.use("/api/proctors", proctorRoutes);
 
