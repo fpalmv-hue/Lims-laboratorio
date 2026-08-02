@@ -91,6 +91,16 @@ model User {
   approvedDocuments Document[]         @relation("DocumentApprovedBy")
   testResults       TestResult[]
   documentRevisions DocumentRevision[]
+
+  // Aprobaciones formales (regla ISO 17025: "reason obligatorio si ya
+  // estaba aprobado"). Relaciones separadas de createdBy/testResults
+  // porque quien aprueba NO tiene por qué ser quien ejecutó el ensayo
+  // -- de hecho, para un auditor de INN, lo ideal es que sean personas
+  // distintas (segregación de funciones).
+  approvedTestResults    TestResult[]   @relation("TestResultApprovedBy")
+  approvedProctors       Proctor[]      @relation("ProctorApprovedBy")
+  approvedAtterbergs     Atterberg[]    @relation("AtterbergApprovedBy")
+  approvedGranulometries Granulometry[] @relation("GranulometryApprovedBy")
 }
 
 //
@@ -143,6 +153,12 @@ model Atterberg {
   liquidLimit   Float? // LL
   plasticLimit  Float? // LP (puede ser null si "NP")
   plasticityIdx Float? // IP
+
+  // Aprobación formal (ISO 17025)
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("AtterbergApprovedBy", fields: [approvedById], references: [id])
 
   notes     String?
   createdAt DateTime @default(now())
@@ -198,6 +214,12 @@ model TestResult {
   isValid        Boolean  @default(true)
   createdById    Int
   createdAt      DateTime @default(now())
+
+  // Aprobación formal (ISO 17025)
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("TestResultApprovedBy", fields: [approvedById], references: [id])
 
   test      Test    @relation(fields: [testId], references: [id], onDelete: Cascade)
   createdBy User    @relation(fields: [createdById], references: [id])
@@ -367,6 +389,12 @@ model Granulometry {
   errorPercentUnder5mm Float?
   qaStatus             String?
 
+  // Aprobación formal (ISO 17025)
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("GranulometryApprovedBy", fields: [approvedById], references: [id])
+
   sieves GranulometrySieve[]
 
   createdAt DateTime @default(now())
@@ -441,6 +469,12 @@ model Proctor {
   omcPercent    Float? // humedad óptima
   mddDryDensity Float? // densidad seca máxima
   curveFit      ProctorCurveFit? @default(PARABOLA)
+
+  // Aprobación formal (ISO 17025)
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("ProctorApprovedBy", fields: [approvedById], references: [id])
 
   // Gráfico
   chartJson Json?

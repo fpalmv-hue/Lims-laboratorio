@@ -8,6 +8,7 @@ import {
   listProctorPointsService,
   listProctorsBySampleService,
   recalculateProctorService,
+  approveProctorService,
 } from "../services/proctor.service";
 
 export async function createProctor(req: AuthRequest, res: Response) {
@@ -106,7 +107,26 @@ export async function recalculateProctor(req: AuthRequest, res: Response) {
       return res.status(401).json({ message: "Usuario no autenticado" });
     }
 
-    const out = await recalculateProctorService(req.params.id, userId);
+    const out = await recalculateProctorService(req.params.id, userId, req.body?.reason);
+    if ((out as any).error) {
+      const e = (out as any).error;
+      return res.status(e.status).json({ message: e.message });
+    }
+    return res.json({ message: "OK", data: (out as any).data });
+  } catch (err: any) {
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
+  }
+}
+
+export async function approveProctor(req: AuthRequest, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
+    const out = await approveProctorService(req.params.id, userId, req.body?.reason);
     if ((out as any).error) {
       const e = (out as any).error;
       return res.status(e.status).json({ message: e.message });

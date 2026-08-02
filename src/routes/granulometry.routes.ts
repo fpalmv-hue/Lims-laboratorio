@@ -7,6 +7,7 @@ import {
   listGranulometries,
   recalculateGranulometry,
   updateGranulometrySieves,
+  approveGranulometry,
 } from "../controllers/granulometry.controller";
 
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -23,6 +24,9 @@ router.post("/:id/recalculate", requireRole(["ADMIN", "JEFE"]), recalculateGranu
 
 // editar tamices + recalcular
 router.put("/:id/sieves", requireRole(["ADMIN", "JEFE"]), updateGranulometrySieves);
+
+// Aprobar granulometría (evento formal, separado de recalculate/sieves)
+router.post("/:id/approve", requireRole(["ADMIN", "JEFE", "CALIDAD"]), approveGranulometry);
 
 router.get("/:id", getGranulometryById);
 

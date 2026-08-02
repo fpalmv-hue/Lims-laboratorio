@@ -3,6 +3,7 @@ import { Response } from "express";
 import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
+import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
 import {
   calculateGranulometry,
   GranulometrySieveInput,
@@ -252,6 +253,13 @@ export const recalculateGranulometry = async (req: AuthRequest, res: Response) =
  
     if (!granulometry) return res.status(404).json({ message: "Granulometría no encontrada" });
  
+    // Regla ISO 17025: si ya estaba aprobada, reason es obligatorio, y el
+    // recálculo revierte automáticamente isApproved a false.
+    const guardMsg = assertReasonIfApproved(granulometry.isApproved, req.body?.reason);
+    if (guardMsg) {
+      return res.status(400).json({ message: guardMsg });
+    }
+ 
     const totalDryMass = granulometry.totalDryMass;
     if (!(totalDryMass > 0)) return res.status(400).json({ message: "totalDryMass inválido en cabecera" });
  
@@ -281,6 +289,7 @@ export const recalculateGranulometry = async (req: AuthRequest, res: Response) =
           cc: calc.cc ?? null,
           errorPercent: calc.errorPercent ?? null,
           calcNotes: calcNotes || null,
+          ...approvalResetIfNeeded(granulometry.isApproved),
         },
       });
  
@@ -372,6 +381,13 @@ export const updateGranulometrySieves = async (req: AuthRequest, res: Response) 
     });
     if (!existing) return res.status(404).json({ message: "Granulometría no encontrada" });
  
+    // Regla ISO 17025: si ya estaba aprobada, reason es obligatorio, y el
+    // reemplazo de tamices revierte automáticamente isApproved a false.
+    const guardMsg = assertReasonIfApproved(existing.isApproved, reason);
+    if (guardMsg) {
+      return res.status(400).json({ message: guardMsg });
+    }
+ 
     const normalized = sieves
       .map((s) => {
         const mm = s.openingMm ?? s.aperture;
@@ -425,6 +441,7 @@ export const updateGranulometrySieves = async (req: AuthRequest, res: Response) 
           cc: calc.cc ?? null,
           errorPercent: calc.errorPercent ?? null,
           calcNotes: calcNotes || null,
+          ...approvalResetIfNeeded(existing.isApproved),
         },
       });
  
@@ -483,5 +500,56 @@ export const updateGranulometrySieves = async (req: AuthRequest, res: Response) 
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Error interno al actualizar tamices" });
+  }
+};
+
+/**
+ * POST /granulometries/:id/approve
+ * Aprueba la granulometría (evento formal, separado de recalculate/sieves).
+ * Requiere rol ADMIN, JEFE o CALIDAD.
+ */
+export const approveGranulometry = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
+    const granulometryId = Number(req.params.id);
+    if (!Number.isFinite(granulometryId) || granulometryId <= 0) {
+      return res.status(400).json({ message: "ID inválido" });
+    }
+
+    const before = await prisma.granulometry.findUnique({ where: { id: granulometryId } });
+    if (!before) return res.status(404).json({ message: "Granulometría no encontrada" });
+
+    if (before.isApproved) {
+      return res.status(409).json({ message: "Esta granulometría ya estaba aprobada" });
+    }
+
+    const updated = await prisma.granulometry.update({
+      where: { id: granulometryId },
+      data: {
+        isApproved: true,
+        approvedById: userId,
+        approvedAt: new Date(),
+      },
+    });
+
+    // Trazabilidad ISO 17025: registrar la aprobación como evento propio.
+    await registerAudit({
+      userId,
+      action: "APPROVE",
+      entityType: "Granulometry",
+      entityId: updated.id,
+      previousValue: before,
+      newValue: updated,
+      reason: req.body?.reason,
+    });
+
+    return res.json({ message: "Granulometría aprobada", data: updated });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Error interno al aprobar granulometría" });
   }
 };

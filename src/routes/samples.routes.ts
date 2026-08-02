@@ -14,6 +14,7 @@ import {
 import {
   upsertAtterberg,
   getAtterbergBySample,
+  approveAtterberg,
   // createAtterberg, // solo si decides mantener POST
 } from "../controllers/atterbergController";
 
@@ -56,6 +57,13 @@ router.get("/:sampleId/atterberg", getAtterbergBySample);
 
 // Crear o actualizar Atterberg (UPSERT)
 router.put("/:sampleId/atterberg", upsertAtterberg);
+
+// Aprobar Atterberg (evento formal, separado del upsert)
+router.post(
+  "/:sampleId/atterberg/approve",
+  requireRole(["ADMIN", "JEFE", "CALIDAD"]),
+  approveAtterberg
+);
 
 // (opcional)
 // router.post("/:sampleId/atterberg", createAtterberg);

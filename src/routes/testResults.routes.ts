@@ -6,6 +6,7 @@ import {
   getTestResultById,
   updateTestResult,
   getTestResults,   // 👈 este es el nombre correcto
+  approveTestResult,
 } from "../controllers/testResults.controller";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
@@ -34,5 +35,12 @@ router.put(
   updateTestResult
 );
 
-export default router;
+// Aprobar resultado (evento formal, separado de update)
+// POST /test-results/:id/approve
+router.post(
+  "/:id/approve",
+  requireRole(["ADMIN", "JEFE", "CALIDAD"]),
+  approveTestResult
+);
 
+export default router;

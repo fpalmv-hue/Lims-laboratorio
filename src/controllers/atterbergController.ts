@@ -2,6 +2,7 @@ import { Response } from "express";
 import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
+import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
 
 function toNumberOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -104,6 +105,16 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
     // ya guardado (current), en vez de sobreescribirse con null.
     const current = await prisma.atterberg.findUnique({ where: { sampleId } });
 
+    // Regla ISO 17025: si ya existía y estaba aprobado, reason es
+    // obligatorio, y la edición revierte automáticamente isApproved a
+    // false (vuelve a quedar pendiente de visado por Jefatura/Calidad).
+    if (current) {
+      const guardMsg = assertReasonIfApproved(current.isApproved, req.body.reason);
+      if (guardMsg) {
+        return res.status(400).json({ message: guardMsg });
+      }
+    }
+
     const finalLL = ll !== null ? ll : current?.liquidLimit ?? null;
     const finalLP = (req.body.plasticLimit !== undefined) ? lp : (current?.plasticLimit ?? null);
     // Nota: si envías plasticLimit: null => queda NP intencionalmente
@@ -137,6 +148,7 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
         plasticLimit: finalLP,
         plasticityIdx: ip,
         notes: finalNotes,
+        ...(current ? approvalResetIfNeeded(current.isApproved) : {}),
       },
     });
 
@@ -175,6 +187,59 @@ export async function getAtterbergBySample(req: AuthRequest, res: Response) {
     if (!atterberg) return res.status(404).json({ message: "Atterberg no encontrado" });
 
     return res.status(200).json({ message: "OK", data: atterberg });
+  } catch (err: any) {
+    console.error(err);
+    return res.status(500).json({ message: "Error interno del servidor" });
+  }
+}
+
+/**
+ * POST /api/samples/:sampleId/atterberg/approve
+ * Aprueba el Atterberg de la muestra (evento formal, separado del upsert).
+ * Requiere rol ADMIN, JEFE o CALIDAD.
+ */
+export async function approveAtterberg(req: AuthRequest, res: Response) {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
+    const sampleId = Number(req.params.sampleId);
+    if (!Number.isFinite(sampleId)) {
+      return res.status(400).json({ message: "sampleId inválido" });
+    }
+
+    const before = await prisma.atterberg.findUnique({ where: { sampleId } });
+    if (!before) {
+      return res.status(404).json({ message: "Atterberg no encontrado para esta muestra" });
+    }
+
+    if (before.isApproved) {
+      return res.status(409).json({ message: "Este Atterberg ya estaba aprobado" });
+    }
+
+    const updated = await prisma.atterberg.update({
+      where: { sampleId },
+      data: {
+        isApproved: true,
+        approvedById: userId,
+        approvedAt: new Date(),
+      },
+    });
+
+    // Trazabilidad ISO 17025: registrar la aprobación como evento propio.
+    await registerAudit({
+      userId,
+      action: "APPROVE",
+      entityType: "Atterberg",
+      entityId: updated.id,
+      previousValue: before,
+      newValue: updated,
+      reason: req.body?.reason,
+    });
+
+    return res.status(200).json({ message: "Atterberg aprobado", data: updated });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });

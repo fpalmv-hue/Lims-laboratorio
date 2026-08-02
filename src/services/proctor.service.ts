@@ -19,6 +19,7 @@
 import prisma from "../prismaClient";
 import { calculateProctorFromDb } from "../utils/proctorCalc";
 import { registerAudit } from "../utils/auditLog";
+import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -130,6 +131,7 @@ export async function addProctorPointService(params: {
     moldId: number;
     wetMassMoldPlusSoilG: number;
     waterContentPercent: number;
+    reason?: string;
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -148,6 +150,12 @@ export async function addProctorPointService(params: {
 
   const proctor = await prisma.proctor.findUnique({ where: { id: proctorId } });
   if (!proctor) return err(404, "Proctor no encontrado.");
+
+  // Regla ISO 17025: agregar un punto a un Proctor ya aprobado invalida
+  // esa aprobación (cambia el dataset base de OMC/MDD) -- reason es
+  // obligatorio, y el Proctor padre revierte isApproved a false más abajo.
+  const guardMsg = assertReasonIfApproved(proctor.isApproved, params.body.reason);
+  if (guardMsg) return err(400, guardMsg);
 
   const mold = await prisma.mold.findUnique({ where: { id: Number(moldId) } });
   if (!mold) return err(404, "Molde no encontrado.");
@@ -179,7 +187,27 @@ export async function addProctorPointService(params: {
     entityId: point.id,
     previousValue: null,
     newValue: point,
+    reason: params.body.reason,
   });
+
+  // Si el Proctor padre ya estaba aprobado, agregar un punto nuevo
+  // invalida esa aprobación -- vuelve a quedar pendiente de visado.
+  if (proctor.isApproved) {
+    const revertedProctor = await prisma.proctor.update({
+      where: { id: proctorId },
+      data: approvalResetIfNeeded(proctor.isApproved),
+    });
+
+    await registerAudit({
+      userId: params.userId,
+      action: "UPDATE",
+      entityType: "Proctor",
+      entityId: proctorId,
+      previousValue: proctor,
+      newValue: revertedProctor,
+      reason: params.body.reason,
+    });
+  }
 
   return { data: point };
 }
@@ -210,13 +238,19 @@ export async function listProctorPointsService(
 // ---------------------------------------------------------------------
 export async function recalculateProctorService(
   proctorIdRaw: unknown,
-  userId: number
+  userId: number,
+  reason?: string
 ): Promise<ServiceResult<any>> {
   const proctorId = parseId(proctorIdRaw, "id");
   if (!proctorId) return err(400, "id de proctor inválido.");
 
   const existing = await prisma.proctor.findUnique({ where: { id: proctorId } });
   if (!existing) return err(404, "Proctor no encontrado.");
+
+  // Regla ISO 17025: si ya estaba aprobado, reason es obligatorio, y el
+  // recálculo revierte automáticamente isApproved a false.
+  const guardMsg = assertReasonIfApproved(existing.isApproved, reason);
+  if (guardMsg) return err(400, guardMsg);
 
   const calc = await calculateProctorFromDb(proctorId);
 
@@ -226,11 +260,12 @@ export async function recalculateProctorService(
       omcPercent: calc.omcPercent,
       mddDryDensity: calc.mddDryDensity,
       chartJson: calc.chartJson as any,
+      ...approvalResetIfNeeded(existing.isApproved),
     },
   });
 
   // Trazabilidad ISO 17025: registrar el recálculo (OMC/MDD nuevos vs.
-  // los que tenía antes el registro).
+  // los que tenía antes el registro, incluye el revert de isApproved si aplicó).
   await registerAudit({
     userId,
     action: "UPDATE",
@@ -238,7 +273,47 @@ export async function recalculateProctorService(
     entityId: updated.id,
     previousValue: existing,
     newValue: updated,
+    reason,
   });
 
   return { data: { proctor: updated, calc } };
+}
+
+// ---------------------------------------------------------------------
+// POST /api/proctors/:id/approve
+// ---------------------------------------------------------------------
+export async function approveProctorService(
+  proctorIdRaw: unknown,
+  userId: number,
+  reason?: string
+): Promise<ServiceResult<any>> {
+  const proctorId = parseId(proctorIdRaw, "id");
+  if (!proctorId) return err(400, "id de proctor inválido.");
+
+  const before = await prisma.proctor.findUnique({ where: { id: proctorId } });
+  if (!before) return err(404, "Proctor no encontrado.");
+
+  if (before.isApproved) return err(409, "Este Proctor ya estaba aprobado.");
+
+  const updated = await prisma.proctor.update({
+    where: { id: proctorId },
+    data: {
+      isApproved: true,
+      approvedById: userId,
+      approvedAt: new Date(),
+    },
+  });
+
+  // Trazabilidad ISO 17025: registrar la aprobación como evento propio.
+  await registerAudit({
+    userId,
+    action: "APPROVE",
+    entityType: "Proctor",
+    entityId: updated.id,
+    previousValue: before,
+    newValue: updated,
+    reason,
+  });
+
+  return { data: updated };
 }

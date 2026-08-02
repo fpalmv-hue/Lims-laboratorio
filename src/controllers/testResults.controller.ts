@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
+import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
 
 // ----------------------------------------------------
 // Crear resultado de ensayo
@@ -147,15 +148,22 @@ export const updateTestResult = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Resultado no encontrado" });
     }
 
+    // Regla ISO 17025: si el resultado ya estaba aprobado, reason es
+    // obligatorio, y la edición revierte automáticamente isApproved a
+    // false (vuelve a quedar pendiente de visado por Jefatura/Calidad).
+    const guardMsg = assertReasonIfApproved(before.isApproved, reason);
+    if (guardMsg) {
+      return res.status(400).json({ message: guardMsg });
+    }
+    Object.assign(dataToUpdate, approvalResetIfNeeded(before.isApproved));
+
     const updated = await prisma.testResult.update({
       where: { id },
       data: dataToUpdate,
     });
 
     // Trazabilidad ISO 17025: registrar el cambio con valor anterior y
-    // nuevo. reason es opcional por ahora a nivel de validación -- este
-    // es el candidato natural para la regla futura "reason obligatorio
-    // si isValid ya era true antes del cambio" (pendiente de decidir).
+    // nuevo (incluye el revert de isApproved si aplicó).
     await registerAudit({
       userId,
       action: "UPDATE",
@@ -172,6 +180,66 @@ export const updateTestResult = async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error("Error al actualizar resultado de ensayo:", error);
+    return res.status(500).json({ message: "Error interno del servidor" });
+  }
+};
+
+// ----------------------------------------------------
+// Aprobar resultado (evento formal, separado de update)
+// POST /test-results/:id/approve
+// Requiere rol ADMIN, JEFE o CALIDAD -- idealmente distinto de quien
+// ejecutó el ensayo (segregación de funciones para ISO 17025).
+// ----------------------------------------------------
+export const approveTestResult = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Usuario no autenticado" });
+    }
+
+    const id = Number(req.params.id);
+
+    if (Number.isNaN(id)) {
+      return res.status(400).json({ message: "ID inválido" });
+    }
+
+    const before = await prisma.testResult.findUnique({ where: { id } });
+
+    if (!before) {
+      return res.status(404).json({ message: "Resultado no encontrado" });
+    }
+
+    if (before.isApproved) {
+      return res.status(409).json({ message: "Este resultado ya estaba aprobado" });
+    }
+
+    const updated = await prisma.testResult.update({
+      where: { id },
+      data: {
+        isApproved: true,
+        approvedById: userId,
+        approvedAt: new Date(),
+      },
+    });
+
+    // Trazabilidad ISO 17025: registrar la aprobación como evento propio.
+    await registerAudit({
+      userId,
+      action: "APPROVE",
+      entityType: "TestResult",
+      entityId: updated.id,
+      previousValue: before,
+      newValue: updated,
+      reason: req.body?.reason,
+    });
+
+    return res.json({
+      message: "Resultado aprobado correctamente",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Error al aprobar resultado de ensayo:", error);
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
