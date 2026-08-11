@@ -4,7 +4,7 @@ Contexto para cualquier instancia de Claude (u otra IA) que trabaje en este repo
 
 ## Qué es este proyecto
 
-LABSOIL es un LIMS (Laboratory Information Management System) para un laboratorio de mecánica de suelos en Chile, desarrollado como proyecto de título/tesis por un Ingeniero en Construcción / Laboratorista Vial (no programador). El laboratorio certifica bajo **MOP 8.102.1** (norma chilena de vialidad) y tiene requisitos funcionales reales de **ISO 17025 + ISO 9001** (acreditación INN Chile) — implementados vía trazabilidad de auditoría, control de calibración y flujo de aprobación, no como justificación para cambios de arquitectura.
+LABSOIL es un LIMS (Laboratory Information Management System) para un laboratorio de mecánica de suelos en Chile, desarrollado por un Ingeniero en Construcción / Laboratorista Vial (no programador) como software de producción real -- NO es un proyecto academico ni de tesis. El laboratorio certifica bajo **MOP 8.102.1** (norma chilena de vialidad) y tiene requisitos funcionales reales de **ISO 17025 + ISO 9001** (acreditación INN Chile) — implementados vía trazabilidad de auditoría, control de calibración y flujo de aprobación, no como justificación para cambios de arquitectura. Prioridad estrategica confirmada (02-ago-2026): expandir la cantidad de tipos de ensayo soportados por el backend, no construir un frontend todavia -- eso queda deliberadamente pospuesto.
 
 ## Decisión de arquitectura FIJA (no reabrir)
 
