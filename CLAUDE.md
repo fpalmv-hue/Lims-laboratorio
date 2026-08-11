@@ -61,22 +61,17 @@ Estructura de carpetas (prisma/):
 
 ## Deuda tecnica conocida (inventario, no resolver sin indicacion explicita)
 
-Codigo muerto confirmado (no importado por nada):
-- src/domain/granulometry/ (soilCalcMop81021.ts, soilSeriesMop81021.ts, types.ts) : motor de calculo alternativo, nunca conectado a ningun controller.
-- src/utils/granulometryMassQa.ts
-- src/utils/granulometryQa.ts
-- src/utils/granulometrySieveQa.ts
-- src/utils/uscsPrelim.ts
-
-Ninguno de estos se borro todavia, quedan como hallazgo pendiente de decision (se eliminan? tenian logica que falta migrar al motor activo?). El unico motor de granulometria realmente activo es src/utils/granulometryCalc.ts. El unico motor de Proctor activo es src/utils/proctorCalc.ts (ese si esta en uso, importado por proctor.service.ts).
+El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts.
 
 Modelos de Prisma sin implementar (existen en schema, sin controller ni rutas):
-- Alert, Attachment, Document, DocumentRevision : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario.
+- Alert, Attachment, Document, DocumentRevision : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario. Document/DocumentRevision son el siguiente gap mas importante identificado (control documental ISO 9001).
 
 Resueltos recientemente (referencia historica, ya no son deuda activa):
 - Rutas duplicadas de Atterberg : resuelto 02-ago-2026, commit 656923a.
 - Falso positivo QA falta N40 : resuelto 02-ago-2026, commit 7ed98cc.
 - upsertAtterberg perdia method y notes en PUT parcial : resuelto sesion 01-ago-2026.
+- QA por fraccion MOP 8.102.1 (formulas 6.2/6.3, tolerancias 5.10) : resuelto 02-ago-2026, commit 26945b6.
+- Codigo muerto de granulometria (src/domain/granulometry/ completo + granulometryMassQa.ts, granulometryQa.ts, granulometrySieveQa.ts, uscsPrelim.ts) : eliminado 02-ago-2026, commit 6d579f1.
 
 Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los motores de calculo (granulometryCalc.ts, proctorCalc.ts, formula IP de Atterberg). Esperar indicacion explicita del usuario, no es evidente que haga falta, es una fase separada.
 
