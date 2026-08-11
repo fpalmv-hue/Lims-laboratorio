@@ -13,6 +13,7 @@ import granulometryRoutes from "./routes/granulometry.routes";
 import { requireAuth } from "./middlewares/auth";
 import moldsRoutes from "./routes/molds.routes";
 import proctorRoutes from "./routes/proctor.routes";
+import documentRoutes from "./routes/document.routes";
 import { CORS_ORIGINS } from "./config/env";
 
 const app = express();
@@ -69,6 +70,7 @@ app.use("/api/granulometries", granulometryRoutes);
 // Eliminado el 02-ago-2026 para dejar un unico camino de escritura.
 app.use("/api/molds", moldsRoutes);
 app.use("/api/proctors", proctorRoutes);
+app.use("/api/documents", documentRoutes);
 
 // Inicio de servidor
 app.listen(PORT, () => {

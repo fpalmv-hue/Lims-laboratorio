@@ -321,10 +321,20 @@ model Document {
   category      DocumentCategory
   description   String?
   version       String           @default("1.0")
-  status        DocumentStatus   @default(ACTIVE)
+  // FIX (auditoria 02-ago-2026): el default era ACTIVE, lo que activaba
+  // un documento recien creado sin pasar por aprobacion -- contradice el
+  // ciclo de vida ISO 9001 (UNDER_REVIEW -> ACTIVE via approve -> OBSOLETE).
+  status        DocumentStatus   @default(UNDER_REVIEW)
   fileUrl       String?
   createdById   Int
   approvedById  Int?
+
+  // Aprobacion formal (ISO 9001 7.5.2 -- documento revisado y aprobado
+  // antes de emitirse). Mismo patron que TestResult/Atterberg/
+  // Granulometry/Proctor, para reusar approvalGuard.ts sin reinventar.
+  isApproved Boolean   @default(false)
+  approvedAt DateTime?
+
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
   effectiveDate DateTime?

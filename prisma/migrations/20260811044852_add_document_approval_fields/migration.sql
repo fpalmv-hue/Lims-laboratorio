@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Document" ADD COLUMN     "approvedAt" TIMESTAMP(3),
+ADD COLUMN     "isApproved" BOOLEAN NOT NULL DEFAULT false,
+ALTER COLUMN "status" SET DEFAULT 'UNDER_REVIEW';
