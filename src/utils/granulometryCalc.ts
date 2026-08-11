@@ -2,22 +2,61 @@
 //
 // FIX (auditoría 18-jul-2026): este archivo definía N°4 = 4,75 mm (criterio
 // ASTM D422). El laboratorio certifica bajo MOP 8.102.1 (Chile), donde
-// N°4 = 5 mm. Corregido abajo. También existía un segundo motor de cálculo
-// en src/domain/granulometry/ que sí usaba 5 mm pero no estaba conectado a
-// ningún controller (código muerto) — se elimina esa carpeta por separado,
-// este archivo queda como el único motor de granulometría del proyecto.
+// N°4 = 5 mm. Corregido abajo.
+//
+// FIX (auditoria 01-ago-2026): falso positivo QA N°40 -- ver isNo40 abajo.
+//
+// REDISEÑO (auditoria 02-ago-2026): implementacion completa del
+// procedimiento MOP 8.102.1 Seccion 6 (formulario 8.102.1.A, Manual de
+// Carreteras Vol. 8, Junio 2022), aportado por el usuario. Hasta esta
+// version, percentRetained/percentPassing se calculaban con una formula
+// simplificada (retainedMass/totalDryMass), que NO es la formula oficial
+// cuando la muestra requiere separacion por lavado en tamiz 5mm (caso mas
+// comun del laboratorio). Reemplazado por las formulas 6.2 y 6.3 de la
+// norma, mas el QA de cierre por fraccion (% de perdida) con las
+// tolerancias explicitas de 5.10.
+
+export type GranulometryFractionLabel = "OVER_5MM" | "UNDER_5MM";
 
 export type GranulometrySieveInput = {
   order: number;
   sieveLabel: string;
   openingMm: number | null;
   retainedMass: number;
+  fraction: GranulometryFractionLabel;
 };
 
 export type GranulometryCalculatedSieve = {
   order: number;
   percentRetained: number;
   percentPassing: number;
+};
+
+// Balance de masas del procedimiento MOP 8.102.1 (Seccion 5). Nombres de
+// variable calcados literalmente de la norma para que el codigo se pueda
+// auditar linea a linea contra el texto oficial:
+//   D  : masa seca inicial retenida en tamiz 5mm (antes de lavar)
+//   D' : masa seca LAVADA retenida en 5mm (5.4.f)
+//   C  : masa seca inicial que pasa 5mm (5.3)
+//   C' : masa de la submuestra reducida por cuarteo de C, 500-1000g (5.6)
+//   C'': masa de esa submuestra ya lavada y seca (5.7)
+//   residueOver5mm / residueUnder5mm : fila "Residuo" de cada tabla del
+//     formulario 8.102.1.A (el "pan" al final de cada serie de tamizado)
+export type GranulometryMassBalanceInput = {
+  massOver5mm_D: number | null;
+  massOver5mm_Dprime: number | null;
+  residueOver5mm: number | null;
+  massUnder5mm_C: number | null;
+  massUnder5mm_Cprime: number | null;
+  massUnder5mm_CprimeWashed: number | null;
+  residueUnder5mm: number | null;
+};
+
+export type GranulometryFractionQa = {
+  errorPercentOver5mm: number | null;
+  errorPercentUnder5mm: number | null;
+  qaStatus: "OK" | "WARNING" | "NO_CONFORME" | "SIN_DATOS";
+  messages: string[];
 };
 
 export type GranulometryCalcResult = {
@@ -28,6 +67,7 @@ export type GranulometryCalcResult = {
   cu: number | null;
   cc: number | null;
   errorPercent: number | null;
+  fractionQa: GranulometryFractionQa;
   calcNotes: string | null;
 };
 
@@ -98,11 +138,9 @@ export function computeDValues(
 }
 
 /**
- * Cierre global simple (comparación masa total vs suma de retenidos).
- * NOTA: esto NO es el QA por fracción que exige MOP (sobre/bajo N°4 con
- * masas D', C'' y residuos lavados) — el schema de Prisma ya reserva campos
- * para eso (massOver5mm_D, errorPercentOver5mm, etc.) pero no se calculan
- * todavía. Ver ROADMAP.md, Fase 2, antes de declarar cumplimiento MOP pleno.
+ * Cierre global simple: masa total tamizada (Z, ~= totalDryMass) vs suma
+ * de retenidos. Es un chequeo de consistencia informativo, NO el QA
+ * normativo de MOP (ese es fractionQa, ver evaluateFractionMassBalance).
  */
 function calcErrorPercentGlobal(sieves: GranulometrySieveInput[], totalDryMass: number): number | null {
   if (!(totalDryMass > 0)) return null;
@@ -112,8 +150,126 @@ function calcErrorPercentGlobal(sieves: GranulometrySieveInput[], totalDryMass: 
 }
 
 /**
+ * QA de cierre por fraccion, MOP 8.102.1 §5.10 y formulario 8.102.1.A.
+ *
+ * Formula oficial de "% de perdida" (calcada del formulario):
+ *   sobre 5mm:  ((D' - (Sum Mi_sobre5mm + residueOver5mm)) / D') x 100
+ *   bajo 5mm:   ((C'' - (Sum Mi_bajo5mm + residueUnder5mm)) / C'') x 100
+ *
+ * Tolerancias explicitas de §5.10: "La suma de todas las masas no debe
+ * diferir en más de 3% para el material bajo 5 mm, ni en más de 0,5%
+ * para el material sobre 5 mm ... En caso contrario, repita el ensaye."
+ * Por eso, exceder la tolerancia es NO_CONFORME (bloqueante), no solo
+ * una advertencia.
+ *
+ * Si D es null/0 (la muestra nunca tuvo fraccion gruesa, ej. un suelo
+ * fino que pasa completo 5mm), el chequeo sobre-5mm se omite (no aplica).
+ * Analogo para C bajo-5mm, aunque en la practica del laboratorio siempre
+ * hay fraccion fina.
+ */
+export function evaluateFractionMassBalance(
+  sieves: GranulometrySieveInput[],
+  balance: GranulometryMassBalanceInput
+): GranulometryFractionQa {
+  const messages: string[] = [];
+
+  const sumOver = sieves
+    .filter((s) => s.fraction === "OVER_5MM")
+    .reduce((acc, s) => acc + (Number.isFinite(s.retainedMass) ? s.retainedMass : 0), 0);
+  const sumUnder = sieves
+    .filter((s) => s.fraction === "UNDER_5MM")
+    .reduce((acc, s) => acc + (Number.isFinite(s.retainedMass) ? s.retainedMass : 0), 0);
+
+  const hasOverFraction = balance.massOver5mm_D !== null && balance.massOver5mm_D > 0;
+  const hasUnderFraction = balance.massUnder5mm_C !== null && balance.massUnder5mm_C > 0;
+
+  let errorPercentOver5mm: number | null = null;
+  let errorPercentUnder5mm: number | null = null;
+  let overOk = true;
+  let underOk = true;
+  let overMissingData = false;
+  let underMissingData = false;
+
+  if (hasOverFraction) {
+    const Dprime = balance.massOver5mm_Dprime;
+    const residue = balance.residueOver5mm ?? 0;
+    if (Dprime === null || !(Dprime > 0)) {
+      messages.push(
+        "QA: Hay fraccion sobre 5mm (D>0) pero falta D' (masa lavada retenida en 5mm) -- no se puede calcular el cierre normativo."
+      );
+      overOk = false;
+      overMissingData = true;
+      errorPercentOver5mm = null;
+    } else {
+      const pct = ((Dprime - (sumOver + residue)) / Dprime) * 100;
+      errorPercentOver5mm = safePct(pct);
+      if (Math.abs(errorPercentOver5mm) > 0.5) {
+        overOk = false;
+        messages.push(
+          `QA: Cierre sobre 5mm = ${errorPercentOver5mm.toFixed(2)}% (tolerancia MOP 8.102.1 §5.10: ±0,5%). Repetir el ensaye.`
+        );
+      }
+    }
+  }
+
+  if (hasUnderFraction) {
+    const Cdouble = balance.massUnder5mm_CprimeWashed;
+    const residue = balance.residueUnder5mm ?? 0;
+    if (Cdouble === null || !(Cdouble > 0)) {
+      messages.push(
+        "QA: Falta C'' (masa lavada y seca de la submuestra bajo 5mm) -- no se puede calcular el cierre normativo."
+      );
+      underOk = false;
+      underMissingData = true;
+      errorPercentUnder5mm = null;
+    } else {
+      const pct = ((Cdouble - (sumUnder + residue)) / Cdouble) * 100;
+      errorPercentUnder5mm = safePct(pct);
+      if (Math.abs(errorPercentUnder5mm) > 3) {
+        underOk = false;
+        messages.push(
+          `QA: Cierre bajo 5mm = ${errorPercentUnder5mm.toFixed(2)}% (tolerancia MOP 8.102.1 §5.10: ±3%). Repetir el ensaye.`
+        );
+      }
+    }
+  }
+
+  // Chequeo de consistencia: que cada tamiz este etiquetado con la
+  // fraccion que le corresponde por su abertura (no bloqueante, solo
+  // aviso -- protege contra error de tipeo al cargar datos).
+  for (const s of sieves) {
+    if (s.openingMm === null) continue;
+    if (s.fraction === "OVER_5MM" && s.openingMm < 5) {
+      messages.push(
+        `QA: El tamiz "${s.sieveLabel}" (${s.openingMm}mm) esta marcado como serie sobre-5mm pero su abertura es menor a 5mm.`
+      );
+    }
+    if (s.fraction === "UNDER_5MM" && s.openingMm >= 5) {
+      messages.push(
+        `QA: El tamiz "${s.sieveLabel}" (${s.openingMm}mm) esta marcado como serie bajo-5mm pero su abertura es mayor o igual a 5mm.`
+      );
+    }
+  }
+
+  let qaStatus: GranulometryFractionQa["qaStatus"];
+  if (!hasOverFraction && !hasUnderFraction) {
+    qaStatus = "SIN_DATOS";
+  } else if (!overOk || !underOk) {
+    const anyRealFailure =
+      (hasOverFraction && !overOk && !overMissingData) ||
+      (hasUnderFraction && !underOk && !underMissingData);
+    const anyMissingData = (hasOverFraction && overMissingData) || (hasUnderFraction && underMissingData);
+    qaStatus = anyRealFailure ? "NO_CONFORME" : anyMissingData ? "WARNING" : "OK";
+  } else {
+    qaStatus = "OK";
+  }
+
+  return { errorPercentOver5mm, errorPercentUnder5mm, qaStatus, messages };
+}
+
+/**
  * QA de serie para SUELOS bajo MOP 8.102.1: exige N°4 (5 mm), N°10 (2 mm),
- * N°40 (0,5 mm) y N°200 (0,08 mm) + fondo para "classificationReady".
+ * N°40 (0,425 mm) y N°200 (0,075 mm) + fondo para "classificationReady".
  */
 export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLabel: string; openingMm: number | null }>) {
   const messages: string[] = [];
@@ -138,15 +294,7 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
     return l.includes("fondo") || l.includes("residuo") || l === "pan";
   };
 
-  // MOP 8.102.1.A: N°4 = 5 mm (NO 4,75 mm — ese es criterio ASTM D422)
-  // FIX (auditoria 01-ago-2026): los datos reales guardan sieveLabel en
-  // formato "pelado" (N4, N10, N40, N200 — sin simbolo ° ni letra "o" de
-  // "No"), que no matcheaba ningun patron de texto existente. Ademas el
-  // fallback numerico de N°40 comparaba contra 0.5 mm en vez del valor
-  // normado correcto (0.425 mm), causando falso positivo "falta N°40"
-  // aunque el tamiz estuviera presente. Se agrega igualdad EXACTA (no
-  // "includes", para no confundir N4 con N40) sobre el formato pelado,
-  // y se corrige el umbral numerico de N°40.
+  // MOP 8.102.1.A: N°4 = 5 mm (NO 4,75 mm -- ese es criterio ASTM D422)
   const isNo4 = (label: string, mm: number | null) => {
     const l = normLabel(label);
     if (l === "n4" || l.includes("n°4") || l.includes("no4") || l.includes("#4") || l.includes("nº4")) return true;
@@ -228,7 +376,7 @@ export function evaluateSoilSeriesQa(inputSieves: Array<{ order: number; sieveLa
 
   if (flags.missingNo4) messages.push("QA: Falta tamiz N°4 (5,00 mm, serie MOP 8.102.1).");
   if (flags.missingNo10) messages.push("QA: Falta tamiz N°10 (2,00 mm).");
-  if (flags.missingNo40) messages.push("QA: Falta tamiz N°40 (0,50 mm).");
+  if (flags.missingNo40) messages.push("QA: Falta tamiz N°40 (0,425 mm).");
   if (flags.missingNo200) messages.push("QA: Falta tamiz N°200 (0,08 mm). Sin él no se puede clasificar USCS por granulometría.");
 
   const nonStd = sieves.filter((s) => isNonStandardSoil(s.sieveLabel, s.openingMm));
@@ -283,20 +431,66 @@ export function buildSoilCurveDataset(
     }));
 }
 
+/**
+ * Motor principal. Calcula percentRetained/percentPassing por tamiz
+ * segun las formulas oficiales MOP 8.102.1 §6.2 (serie sobre 5mm, sobre
+ * D') y §6.3 (serie bajo 5mm, sobre C''), NO segun retainedMass/totalMasa
+ * simple (asi funcionaba antes del rediseño del 02-ago-2026).
+ *
+ * §6.2  Ri = Mi / (C+D) x 100                    [fraccion OVER_5MM]
+ * §6.3  Ri = (C x Mi) / (C' x (C+D)) x 100        [fraccion UNDER_5MM]
+ *
+ * Si faltan C o D (o son 0), no se puede aplicar ninguna de las dos
+ * formulas -- en ese caso se devuelve percentRetained en 0 para esos
+ * tamices y se deja constancia explicita en calcNotes, en vez de
+ * calcular con una formula incorrecta o dividir por cero.
+ */
 export function calculateGranulometry(
   sievesInput: GranulometrySieveInput[],
-  totalDryMass: number
+  totalDryMass: number,
+  balance: GranulometryMassBalanceInput
 ): GranulometryCalcResult {
   const sieves = [...sievesInput].sort((a, b) => a.order - b.order);
 
+  const C = balance.massUnder5mm_C;
+  const D = balance.massOver5mm_D;
+  const Cprime = balance.massUnder5mm_Cprime;
+
+  const hasCD = C !== null && D !== null && C + D > 0;
+  const denomOver = hasCD ? (C as number) + (D as number) : null;
+  const denomUnder = hasCD && Cprime !== null && Cprime > 0 ? (Cprime as number) * (denomOver as number) : null;
+
+  const missingBalanceNotes: string[] = [];
+  if (!hasCD) {
+    missingBalanceNotes.push(
+      "No se pudo calcular %retenido/%pasa: faltan C (masa bajo 5mm) y/o D (masa sobre 5mm) en la cabecera del ensayo."
+    );
+  } else if (denomUnder === null && sieves.some((s) => s.fraction === "UNDER_5MM")) {
+    missingBalanceNotes.push(
+      "No se pudo calcular %retenido/%pasa de la serie fina: falta C' (masa de la submuestra cuarteada bajo 5mm)."
+    );
+  }
+
   let cumulative = 0;
   const computed: GranulometryCalculatedSieve[] = sieves.map((s) => {
-    const pr = (s.retainedMass / totalDryMass) * 100;
-    cumulative += pr;
+    let ri: number | null = null;
+    if (s.fraction === "OVER_5MM" && denomOver !== null) {
+      ri = (s.retainedMass / denomOver) * 100;
+    } else if (s.fraction === "UNDER_5MM" && denomUnder !== null && C !== null) {
+      ri = ((C * s.retainedMass) / denomUnder) * 100;
+    }
+
+    if (ri === null) {
+      // No se puede calcular: se registra 0 para no romper el acumulado,
+      // pero el hueco queda explicado en calcNotes (missingBalanceNotes).
+      return { order: s.order, percentRetained: 0, percentPassing: safePct(100 - cumulative) };
+    }
+
+    cumulative += ri;
     const pp = 100 - cumulative;
     return {
       order: s.order,
-      percentRetained: safePct(pr),
+      percentRetained: safePct(ri),
       percentPassing: safePct(pp),
     };
   });
@@ -323,15 +517,21 @@ export function calculateGranulometry(
   }
 
   const errorPercent = calcErrorPercentGlobal(sievesInput, totalDryMass);
+  const fractionQa = evaluateFractionMassBalance(sievesInput, balance);
 
-  // FIX: el mensaje anterior declaraba "aceptable según tolerancia MOP / ISO
-  // 17025" de forma incondicional — esto es solo un cierre de masa GLOBAL,
-  // no el QA por fracción que exige MOP. Se deja explícito para no
-  // sobre-declarar cumplimiento normativo en un certificado.
-  let calcNotes = "Dx por interpolación semi-log (X=log(mm), Y=% pasa). Serie MOP 8.102.1.";
+  const notesParts: string[] = [
+    "%retenido/%pasa segun formulas MOP 8.102.1 §6.2 (sobre 5mm) y §6.3 (bajo 5mm).",
+  ];
   if (errorPercent !== null) {
-    calcNotes = `Cierre de masa global = ${errorPercent.toFixed(2)} %. Este es un control de cierre total, no reemplaza el QA por fracción (sobre/bajo N°4) que exige MOP 8.102.1 — ver ROADMAP.md Fase 2.`;
+    notesParts.push(`Chequeo Z vs suma total = ${errorPercent.toFixed(2)}%.`);
   }
+  if (fractionQa.errorPercentOver5mm !== null) {
+    notesParts.push(`Cierre sobre 5mm (D') = ${fractionQa.errorPercentOver5mm.toFixed(2)}% (tol. ±0,5%).`);
+  }
+  if (fractionQa.errorPercentUnder5mm !== null) {
+    notesParts.push(`Cierre bajo 5mm (C'') = ${fractionQa.errorPercentUnder5mm.toFixed(2)}% (tol. ±3%).`);
+  }
+  notesParts.push(...missingBalanceNotes);
 
   return {
     sieves: computed,
@@ -341,6 +541,7 @@ export function calculateGranulometry(
     cu: cu !== null ? round3(cu) : null,
     cc: cc !== null ? round3(cc) : null,
     errorPercent,
-    calcNotes,
+    fractionQa,
+    calcNotes: notesParts.join(" "),
   };
 }

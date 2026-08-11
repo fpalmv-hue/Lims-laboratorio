@@ -69,6 +69,14 @@ enum ProctorCurveFit {
   LINEAR_SEGMENTS
 }
 
+// Granulometria: a que serie de tamizado MOP 8.102.1 pertenece cada
+// tamiz (5.4-5.5 vs 5.6-5.8). Declarado explicito, no inferido de
+// openingMm, siguiendo la leccion del bug N40 (nunca inferir formato).
+enum GranulometryFraction {
+  OVER_5MM
+  UNDER_5MM
+}
+
 //
 // ─────────────────────────────────────
 //   USUARIOS Y ROLES
@@ -412,6 +420,10 @@ model GranulometrySieve {
   retainedMass    Float
   percentRetained Float
   percentPassing  Float
+
+  // MOP 8.102.1: serie gruesa (5.4-5.5, formula 6.2, sobre D') vs serie
+  // fina (5.6-5.8, formula 6.3, sobre C''). Obligatorio, sin default.
+  fraction GranulometryFraction
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
