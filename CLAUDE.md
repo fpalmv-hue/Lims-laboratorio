@@ -64,7 +64,7 @@ Estructura de carpetas (prisma/):
 El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts.
 
 Modelos de Prisma sin implementar (existen en schema, sin controller ni rutas):
-- Alert, Attachment, Document, DocumentRevision : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario. Document/DocumentRevision son el siguiente gap mas importante identificado (control documental ISO 9001).
+- Alert, Attachment : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario.
 
 Resueltos recientemente (referencia historica, ya no son deuda activa):
 - Rutas duplicadas de Atterberg : resuelto 02-ago-2026, commit 656923a.
@@ -72,6 +72,7 @@ Resueltos recientemente (referencia historica, ya no son deuda activa):
 - upsertAtterberg perdia method y notes en PUT parcial : resuelto sesion 01-ago-2026.
 - QA por fraccion MOP 8.102.1 (formulas 6.2/6.3, tolerancias 5.10) : resuelto 02-ago-2026, commit 26945b6.
 - Codigo muerto de granulometria (src/domain/granulometry/ completo + granulometryMassQa.ts, granulometryQa.ts, granulometrySieveQa.ts, uscsPrelim.ts) : eliminado 02-ago-2026, commit 6d579f1.
+- Control documental ISO 9001 (Document/DocumentRevision, ciclo UNDER_REVIEW/ACTIVE/OBSOLETE) : implementado 02-ago-2026, commit 41f47f7.
 
 Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los motores de calculo (granulometryCalc.ts, proctorCalc.ts, formula IP de Atterberg). Esperar indicacion explicita del usuario, no es evidente que haga falta, es una fase separada.
 
