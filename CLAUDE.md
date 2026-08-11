@@ -51,6 +51,7 @@ Estructura de carpetas (prisma/):
 - **Regla de aprobación** (`src/utils/approvalGuard.ts`): los 4 modelos de resultado (`TestResult`, `Atterberg`, `Granulometry`, `Proctor`) tienen `isApproved / approvedById / approvedAt`. Al editar un registro ya aprobado: `reason` es obligatorio (`assertReasonIfApproved`) y la edición revierte `isApproved` a `false` automáticamente (`approvalResetIfNeeded`), quedando pendiente de re-visado. Roles que pueden aprobar: `ADMIN`, `JEFE`, `CALIDAD` — nunca `LABORATORISTA` (segregación de funciones).
 - **Un solo camino de escritura por entidad.** No duplicar routers para el mismo recurso (pasó con Atterberg — corregido 02-ago-2026, ver deuda técnica resuelta abajo).
 - Baja lógica en vez de DELETE físico donde aplica (ej. `Mold.status = OUT_OF_SERVICE`).
+- **Separación de areas del laboratorio (Sample.area, LabArea enum).** El laboratorio trabaja con normativas distintas segun el area: SOIL_MECHANICS (mecanica de suelos), CONCRETE_AGGREGATES (hormigon y aridos), MINE_INTERIOR (ensayos interior mina). NO deben mezclarse -- ej: existe una norma paralela de granulometria para aridos (MOP 8.202.3) con tolerancias distintas a la de suelos (MOP 8.102.1). Cada modulo de ensayo nuevo DEBE validar que Sample.area coincida con el area a la que pertenece ese ensayo antes de crear el registro (ver el guard ya implementado en Atterberg/Granulometry/Proctor como ejemplo a replicar). Confirmado con el usuario 02-ago-2026, commit 47ae6e5.
 
 ## Conocimiento normativo fijo (no cuestionar sin fuente MOP explícita)
 
