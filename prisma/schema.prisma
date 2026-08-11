@@ -77,6 +77,19 @@ enum GranulometryFraction {
   UNDER_5MM
 }
 
+// Area de laboratorio a la que pertenece cada muestra. CRITICO: separa
+// normativas y modelos de ensayo que NO deben mezclarse entre si (ej:
+// granulometria de suelos MOP 8.102.1 vs granulometria de aridos
+// MOP 8.202.3 -- mismo concepto, tolerancias y procedimiento distintos).
+// Cada modulo de ensayo nuevo debe validar que Sample.area coincida con
+// el area a la que pertenece ese tipo de ensayo antes de crear el
+// registro. Confirmado con el usuario 02-ago-2026.
+enum LabArea {
+  SOIL_MECHANICS
+  CONCRETE_AGGREGATES
+  MINE_INTERIOR
+}
+
 //
 // ─────────────────────────────────────
 //   USUARIOS Y ROLES
@@ -127,6 +140,11 @@ model Sample {
   receivedBy   String
   status       String
   notes        String?
+  // Area de laboratorio (SOIL_MECHANICS/CONCRETE_AGGREGATES/MINE_INTERIOR).
+  // Obligatorio, SIN default -- debe declararse explicitamente en cada
+  // muestra nueva. Separa normativas y modelos de ensayo que no deben
+  // mezclarse entre areas (confirmado con el usuario 02-ago-2026).
+  area         LabArea
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

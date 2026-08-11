@@ -55,6 +55,13 @@ export async function createProctorService(params: {
   const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
   if (!sample) return err(404, "Muestra no encontrada.");
 
+  // CRITICO: Proctor es un ensayo de mecanica de suelos. No debe crearse
+  // sobre una muestra de otra area del laboratorio (hormigon y aridos /
+  // interior mina). Confirmado con el usuario 02-ago-2026.
+  if (sample.area !== "SOIL_MECHANICS") {
+    return err(400, `Proctor es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`);
+  }
+
   const { methodCode, methodName, layers, blowsPerLayer, notes } = params.body ?? {};
 
   const proctor = await prisma.proctor.create({

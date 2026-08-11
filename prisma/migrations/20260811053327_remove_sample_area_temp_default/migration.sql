@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Sample" ALTER COLUMN "area" DROP DEFAULT;

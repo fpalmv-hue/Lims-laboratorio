@@ -118,9 +118,19 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
 
     const sample = await prisma.sample.findUnique({
       where: { id: Number(sampleId) },
-      select: { id: true },
+      select: { id: true, area: true, code: true },
     });
     if (!sample) return res.status(404).json({ message: "Muestra no encontrada." });
+
+    // CRITICO: Granulometry implementa MOP 8.102.1, especifico de
+    // mecanica de suelos (existe una norma paralela para aridos,
+    // MOP 8.202.3, con tolerancias distintas -- no deben mezclarse).
+    // Confirmado con el usuario 02-ago-2026.
+    if (sample.area !== "SOIL_MECHANICS") {
+      return res.status(400).json({
+        message: `Granulometry (MOP 8.102.1) es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`,
+      });
+    }
 
     const { balance, error: balanceError } = parseMassBalanceFromBody(req.body);
     if (balanceError) return res.status(400).json({ message: balanceError });

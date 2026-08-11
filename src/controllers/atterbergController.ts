@@ -32,6 +32,13 @@ export async function createAtterberg(req: AuthRequest, res: Response) {
     const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
     if (!sample) return res.status(404).json({ message: "Sample no existe" });
 
+    // CRITICO: mismo guard que upsertAtterberg -- ver ahi para el detalle.
+    if (sample.area !== "SOIL_MECHANICS") {
+      return res.status(400).json({
+        message: `Atterberg es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`,
+      });
+    }
+
     // Evitar duplicado 1:1
     const existing = await prisma.atterberg.findUnique({ where: { sampleId } });
     if (existing) {
@@ -96,6 +103,16 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
 
     const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
     if (!sample) return res.status(404).json({ message: "Sample no existe" });
+
+    // CRITICO: Atterberg es un ensayo de mecanica de suelos. No debe
+    // crearse/editarse sobre una muestra de otra area del laboratorio
+    // (hormigon y aridos / interior mina) -- confirmado con el usuario
+    // 02-ago-2026, evita mezclar normativas entre areas.
+    if (sample.area !== "SOIL_MECHANICS") {
+      return res.status(400).json({
+        message: `Atterberg es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`,
+      });
+    }
 
     const ll = toNumberOrNull(req.body.liquidLimit);
     const lp = toNumberOrNull(req.body.plasticLimit); // null = NP

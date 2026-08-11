@@ -4,19 +4,31 @@ import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
 
+const VALID_AREAS = ["SOIL_MECHANICS", "CONCRETE_AGGREGATES", "MINE_INTERIOR"];
+
 // -----------------------------------------------------------------------------
 // Crear muestra
 // POST /samples
 // -----------------------------------------------------------------------------
 export const createSample = async (req: AuthRequest, res: Response) => {
   try {
-    const { code, project, location, materialType, receivedBy, status, notes } =
+    const { code, project, location, materialType, receivedBy, status, notes, area } =
       req.body;
 
     if (!code || !project || !location || !materialType || !receivedBy) {
       return res.status(400).json({
         message:
           "code, project, location, materialType y receivedBy son obligatorios",
+      });
+    }
+
+    // area es obligatoria y explicita -- CRITICO: separa normativas y
+    // modelos de ensayo que no deben mezclarse entre areas del
+    // laboratorio (mecanica de suelos / hormigon y aridos / interior
+    // mina). Sin fallback silencioso a un area por defecto.
+    if (!area || !VALID_AREAS.includes(area)) {
+      return res.status(400).json({
+        message: `area es obligatoria. Valores validos: ${VALID_AREAS.join(", ")}.`,
       });
     }
 
@@ -44,6 +56,7 @@ export const createSample = async (req: AuthRequest, res: Response) => {
         receivedBy,
         status: status ?? "PENDING",
         notes: notes ?? "",
+        area,
       },
     });
 
@@ -219,6 +232,7 @@ export const updateSample = async (req: AuthRequest, res: Response) => {
       status,
       notes,
       assignedToId,
+      area,
       reason,
     } = req.body;
 
@@ -232,6 +246,14 @@ export const updateSample = async (req: AuthRequest, res: Response) => {
     if (status !== undefined) data.status = status;
     if (notes !== undefined) data.notes = notes;
     if (assignedToId !== undefined) data.assignedToId = assignedToId;
+    if (area !== undefined) {
+      if (!VALID_AREAS.includes(area)) {
+        return res.status(400).json({
+          message: `area invalida. Valores validos: ${VALID_AREAS.join(", ")}.`,
+        });
+      }
+      data.area = area;
+    }
 
     // Capturamos el estado ANTES de modificar, para el AuditLog.
     const before = await prisma.sample.findUnique({ where: { id } });
