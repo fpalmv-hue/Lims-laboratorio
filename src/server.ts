@@ -14,6 +14,8 @@ import { requireAuth } from "./middlewares/auth";
 import moldsRoutes from "./routes/molds.routes";
 import proctorRoutes from "./routes/proctor.routes";
 import cbrRoutes from "./routes/cbr.routes";
+import pycnometerRoutes from "./routes/pycnometer.routes";
+import particleDensityRoutes from "./routes/particleDensity.routes";
 import documentRoutes from "./routes/document.routes";
 import { CORS_ORIGINS } from "./config/env";
 
@@ -72,6 +74,8 @@ app.use("/api/granulometries", granulometryRoutes);
 app.use("/api/molds", moldsRoutes);
 app.use("/api/proctors", proctorRoutes);
 app.use("/api/cbrs", cbrRoutes);
+app.use("/api/pycnometers", pycnometerRoutes);
+app.use("/api/particle-densities", particleDensityRoutes);
 app.use("/api/documents", documentRoutes);
 
 // Inicio de servidor

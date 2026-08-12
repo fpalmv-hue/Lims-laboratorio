@@ -60,10 +60,13 @@ Estructura de carpetas (prisma/):
 - **N°200 = 0,075 mm** (0,08 mm también se acepta como redondeo en el código).
 - Los `sieveLabel` en la base de datos reales están en formato "pelado": `N4`, `N10`, `N40`, `N200` — sin símbolo `°` ni la letra `o` de "No". Cualquier matching de texto sobre `sieveLabel` debe considerar este formato explícitamente (ver `granulometryCalc.ts`).
 - **CBR (Índice de Soporte California) se norma por NCh1852.Of81** (no MOP 8.102.x). Procedimiento confirmado por el usuario 11-ago-2026: 3 puntos de compactación (12/25/56 golpes por capa, 5 capas), inmersión 4 días (96h) con lectura de hinchamiento, CBR de cada punto contra presiones patrón **70.3 kg/cm² (0.1")** y **105.5 kg/cm² (0.2")** — el mayor de los dos. El **CBR de diseño** se interpola al 95% de la DMCS del Proctor de la misma muestra (ver `cbrCalc.ts`).
+- **Densidad de Partículas Sólidas se norma por NCh1532.Of80** (equivalente ASTM D854-58), método del picnómetro. Aplica solo a partículas < 5mm (partículas > 5mm van por NCh1117, fuera de alcance por ahora — ver deuda técnica). Fórmula: `ρs = ms / (ms + Ma(tx) − Mm) · ρw(tx)`, con `Ma(tx) = Ma(ti) − Mf + Mf·[ρw(tx)/ρw(ti)]` calculado desde la calibración del picnómetro. Tabla de densidad del agua (16–29°C, interpolación lineal) en `particleDensityCalc.ts` — no extrapolar fuera de ese rango. Sin qaStatus bloqueante: la norma no define umbral numérico, solo recomienda repetir el ensayo como verificación cruzada.
 
 ## Deuda tecnica conocida (inventario, no resolver sin indicacion explicita)
 
-El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts. El unico motor de CBR activo es src/utils/cbrCalc.ts, importado por cbr.service.ts (NCh1852.Of81, desde 11-ago-2026) -- CBR depende de un Proctor ya existente de la misma muestra (proctorId obligatorio en Cbr) para el CBR de diseno al 95% DMCS.
+El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts. El unico motor de CBR activo es src/utils/cbrCalc.ts, importado por cbr.service.ts (NCh1852.Of81, desde 11-ago-2026) -- CBR depende de un Proctor ya existente de la misma muestra (proctorId obligatorio en Cbr) para el CBR de diseno al 95% DMCS. El unico motor de Densidad de Particulas Solidas activo es src/utils/particleDensityCalc.ts, importado por particleDensity.service.ts (NCh1532.Of80, desde 12-ago-2026) -- depende de un Pycnometer ya calibrado (Mf/Ma(ti)/ti obligatorios antes de poder calcular ρs).
+
+Caso mixto de Densidad de Particulas Solidas (muestra con fraccion >5mm y <5mm, promedio ponderado por masa seca entre NCh1532.Of80 y NCh1117) : NO implementado, fuera de alcance por decision explicita del usuario 12-ago-2026. Solo cubre el caso <5mm (metodo picnometro), que es el uso predominante del laboratorio. Si se requiere el caso mixto a futuro, es una fase separada -- no iniciar de oficio.
 
 Modelos de Prisma sin implementar (existen en schema, sin controller ni rutas):
 - Alert, Attachment : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario.
@@ -75,7 +78,8 @@ Resueltos recientemente (referencia historica, ya no son deuda activa):
 - QA por fraccion MOP 8.102.1 (formulas 6.2/6.3, tolerancias 5.10) : resuelto 02-ago-2026, commit 26945b6.
 - Codigo muerto de granulometria (src/domain/granulometry/ completo + granulometryMassQa.ts, granulometryQa.ts, granulometrySieveQa.ts, uscsPrelim.ts) : eliminado 02-ago-2026, commit 6d579f1.
 - Control documental ISO 9001 (Document/DocumentRevision, ciclo UNDER_REVIEW/ACTIVE/OBSOLETE) : implementado 02-ago-2026, commit 41f47f7.
-- Ensayo CBR (Cbr/CbrPoint, NCh1852.Of81) : implementado 11-ago-2026, pendiente de commit. Extiende Mold con heightMm (necesario para swellPercent) -- moldsController ya acepta heightMm en create/update.
+- Ensayo CBR (Cbr/CbrPoint, NCh1852.Of81) : implementado 11-ago-2026, commit fe9ddbc.
+- Ensayo Densidad de Particulas Solidas (ParticleDensity + catalogo Pycnometer, NCh1532.Of80) : implementado 12-ago-2026, pendiente de commit. Primer modulo de ensayo con nombres de modelo/archivo en ingles (ParticleDensity, Pycnometer) por consistencia con el resto del schema -- convencion a seguir en modulos futuros salvo indicacion contraria. Picnometro es instrumento trazable propio (catalogo dedicado, mismo patron que Mold: POST /:id/calibrate separado de PUT /:id).
 
 Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los motores de calculo (granulometryCalc.ts, proctorCalc.ts, formula IP de Atterberg). Esperar indicacion explicita del usuario, no es evidente que haga falta, es una fase separada.
 

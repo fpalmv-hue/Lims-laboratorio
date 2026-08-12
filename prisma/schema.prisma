@@ -71,6 +71,27 @@ enum CbrStatus {
   NEEDS_REVIEW
 }
 
+// Particle Density (NCh1532.Of80)
+enum ParticleDensityStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
+// Tipo de contenedor del picnometro. Determina la precision de balanza
+// exigida por la norma (frasco >=100ml -> 0.01g, botella >=50ml ->
+// 0.001g) -- se guarda como dato informativo, sin validacion bloqueante
+// (confirmado con el usuario 12-ago-2026).
+enum PycnometerContainerType {
+  FLASK
+  BOTTLE
+}
+
+enum PycnometerStatus {
+  ACTIVE
+  OUT_OF_SERVICE
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -125,11 +146,12 @@ model User {
   // porque quien aprueba NO tiene por qué ser quien ejecutó el ensayo
   // -- de hecho, para un auditor de INN, lo ideal es que sean personas
   // distintas (segregación de funciones).
-  approvedTestResults    TestResult[]   @relation("TestResultApprovedBy")
-  approvedProctors       Proctor[]      @relation("ProctorApprovedBy")
-  approvedAtterbergs     Atterberg[]    @relation("AtterbergApprovedBy")
-  approvedGranulometries Granulometry[] @relation("GranulometryApprovedBy")
-  approvedCbrs           Cbr[]          @relation("CbrApprovedBy")
+  approvedTestResults       TestResult[]      @relation("TestResultApprovedBy")
+  approvedProctors          Proctor[]         @relation("ProctorApprovedBy")
+  approvedAtterbergs        Atterberg[]       @relation("AtterbergApprovedBy")
+  approvedGranulometries    Granulometry[]    @relation("GranulometryApprovedBy")
+  approvedCbrs              Cbr[]             @relation("CbrApprovedBy")
+  approvedParticleDensities ParticleDensity[] @relation("ParticleDensityApprovedBy")
 }
 
 //
@@ -173,6 +195,11 @@ model Sample {
 
   // CBR: puede ser más de uno por muestra
   cbrs Cbr[]
+
+  // Densidad de Particulas Solidas (NCh1532.Of80): puede repetirse
+  // (la norma recomienda dos ensayos como verificacion cruzada, sin
+  // umbral de bloqueo automatico).
+  particleDensities ParticleDensity[]
 }
 
 //
@@ -344,19 +371,19 @@ model AuditLog {
 //
 
 model Document {
-  id            Int              @id @default(autoincrement())
-  code          String           @unique
-  title         String
-  category      DocumentCategory
-  description   String?
-  version       String           @default("1.0")
+  id           Int              @id @default(autoincrement())
+  code         String           @unique
+  title        String
+  category     DocumentCategory
+  description  String?
+  version      String           @default("1.0")
   // FIX (auditoria 02-ago-2026): el default era ACTIVE, lo que activaba
   // un documento recien creado sin pasar por aprobacion -- contradice el
   // ciclo de vida ISO 9001 (UNDER_REVIEW -> ACTIVE via approve -> OBSOLETE).
-  status        DocumentStatus   @default(UNDER_REVIEW)
-  fileUrl       String?
-  createdById   Int
-  approvedById  Int?
+  status       DocumentStatus   @default(UNDER_REVIEW)
+  fileUrl      String?
+  createdById  Int
+  approvedById Int?
 
   // Aprobacion formal (ISO 9001 7.5.2 -- documento revisado y aprobado
   // antes de emitirse). Mismo patron que TestResult/Atterberg/
@@ -364,8 +391,8 @@ model Document {
   isApproved Boolean   @default(false)
   approvedAt DateTime?
 
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   effectiveDate DateTime?
   obsoleteDate  DateTime?
 
@@ -673,4 +700,83 @@ model CbrPoint {
   @@unique([cbrId, order])
   @@index([cbrId])
   @@index([moldId])
+}
+
+//
+// ─────────────────────────────────────
+//   PICNOMETRO (instrumento trazable) + DENSIDAD DE PARTICULAS SOLIDAS
+//   NCh1532.Of80 (equivalente ASTM D854-58)
+// ─────────────────────────────────────
+//
+
+model Pycnometer {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique // ej: "PICN-01"
+  description String?
+
+  containerType     PycnometerContainerType?
+  nominalCapacityMl Float?
+
+  // Calibracion (procedimiento independiente, reutilizable entre ensayos
+  // -- se hace una sola vez por picnometro, ver POST /:id/calibrate).
+  // Mf
+  massEmptyG          Float?
+  // Ma(ti)
+  massWaterAtCalTempG Float?
+  // ti
+  calibrationTempC    Float?
+
+  status             PycnometerStatus @default(ACTIVE)
+  lastCalibrationAt  DateTime?
+  calibrationCertUrl String?
+
+  particleDensities ParticleDensity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ParticleDensity {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  pycnometerId Int
+  pycnometer   Pycnometer @relation(fields: [pycnometerId], references: [id])
+
+  methodCode String?               @default("NCh1532.Of80")
+  status     ParticleDensityStatus @default(DRAFT)
+
+  // Alcance de esta fase: solo particulas < 5mm (metodo picnometro).
+  // El caso mixto (>5mm + <5mm, promedio ponderado por NCh1117) queda
+  // fuera de alcance -- ver deuda tecnica en CLAUDE.md.
+  containerType     PycnometerContainerType?
+  balancePrecisionG Float? // informativo, sin validacion bloqueante
+
+  // INPUT operador (mismos simbolos que la norma, para auditar linea a
+  // linea contra el texto oficial)
+  msG       Float // masa seca de la muestra de ensayo
+  mmG       Float // masa picnometro + muestra + agua a tx
+  testTempC Float // tx: temperatura de ensayo (aprox. a 1°C)
+
+  // CALCULATED
+  maAtTestTempG       Float? // Ma(tx), interpolado desde la calibracion del picnometro
+  waterDensityAtTestG Float? // ρw(tx)
+  particleDensityGcm3 Float? // ρs
+
+  calcNote String? // ej: si tx cae fuera de la tabla 16-29°C
+
+  // Aprobación formal (ISO 17025) -- sin qaStatus bloqueante, la norma no
+  // define umbral numerico (solo recomienda repetir el ensayo).
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("ParticleDensityApprovedBy", fields: [approvedById], references: [id])
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sampleId])
+  @@index([pycnometerId])
 }
