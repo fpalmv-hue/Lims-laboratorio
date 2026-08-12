@@ -92,6 +92,14 @@ enum PycnometerStatus {
   OUT_OF_SERVICE
 }
 
+// Determinacion de Humedad (MC Vol.8 §8.102.2, jun-2022 -- adaptacion de
+// NCh1515-79)
+enum MoistureContentStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -152,6 +160,7 @@ model User {
   approvedGranulometries    Granulometry[]    @relation("GranulometryApprovedBy")
   approvedCbrs              Cbr[]             @relation("CbrApprovedBy")
   approvedParticleDensities ParticleDensity[] @relation("ParticleDensityApprovedBy")
+  approvedMoistureContents  MoistureContent[] @relation("MoistureContentApprovedBy")
 }
 
 //
@@ -200,6 +209,11 @@ model Sample {
   // (la norma recomienda dos ensayos como verificacion cruzada, sin
   // umbral de bloqueo automatico).
   particleDensities ParticleDensity[]
+
+  // Determinacion de Humedad (MC Vol.8 §8.102.2): puede repetirse por
+  // muestra. Diseñado para ser referenciado por otros ensayos futuros via
+  // FK opcional (ej. Cono de Arena, moistureContentId) -- ver CLAUDE.md.
+  moistureContents MoistureContent[]
 }
 
 //
@@ -779,4 +793,53 @@ model ParticleDensity {
 
   @@index([sampleId])
   @@index([pycnometerId])
+}
+
+//
+// ─────────────────────────────────────
+//   DETERMINACION DE HUMEDAD
+//   MC Vol.8 §8.102.2 (jun-2022, adaptacion de NCh1515-79)
+// ─────────────────────────────────────
+//
+
+model MoistureContent {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  methodCode String?               @default("MC Vol.8 §8.102.2")
+  status     MoistureContentStatus @default(DRAFT)
+
+  // INPUT operador (mismos simbolos que la norma, para auditar linea a
+  // linea contra el texto oficial)
+  mrG         Float // masa recipiente solo (vacio, seco, con tapa)
+  mhG         Float // masa recipiente + muestra humeda
+  msG         Float // masa recipiente + muestra seca
+  // Temperatura de secado usada (110±5°C normal, 60±5°C para suelos con
+  // yeso/materia organica -- Nota 2). Valor libre, sin forzar 110/60:
+  // el operador puede justificar otros valores en casos especiales.
+  dryingTempC Float
+
+  // CALCULATED
+  wPercent Float? // w = 100 * (mh - ms) / (ms - mr), aprox. al 0.1%
+
+  calcNote String?
+
+  // Aprobación formal (ISO 17025) -- sin qaStatus bloqueante: la norma no
+  // define un criterio de aceptacion/rechazo del valor de humedad (solo
+  // masa constante durante el secado, que es procedimiento de laboratorio,
+  // no verificable por software).
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("MoistureContentApprovedBy", fields: [approvedById], references: [id])
+
+  // Nota normativa 4: la muestra usada para humedad se descarta, no se
+  // reutiliza en otro ensayo -- no hay accion de software, queda como
+  // recordatorio para quien opere el formulario/cliente de esta API.
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sampleId])
 }
