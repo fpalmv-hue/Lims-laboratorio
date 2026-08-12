@@ -54,7 +54,7 @@ export async function createMold(req: AuthRequest, res: Response) {
       return res.status(401).json({ message: "Usuario no autenticado" });
     }
 
-    const { code, description, volumeCm3, tareMassG, collarMassG, status } = req.body;
+    const { code, description, volumeCm3, tareMassG, collarMassG, heightMm, status } = req.body;
 
     if (!code || typeof code !== "string" || !code.trim()) {
       return res.status(400).json({ message: "code es obligatorio" });
@@ -75,6 +75,7 @@ export async function createMold(req: AuthRequest, res: Response) {
         volumeCm3: Number(volumeCm3),
         tareMassG: tareMassG !== undefined && tareMassG !== null ? Number(tareMassG) : null,
         collarMassG: collarMassG !== undefined && collarMassG !== null ? Number(collarMassG) : null,
+        heightMm: heightMm !== undefined && heightMm !== null ? Number(heightMm) : null,
         status: status ?? MoldStatus.ACTIVE,
       },
     });
@@ -114,13 +115,14 @@ export async function updateMold(req: AuthRequest, res: Response) {
       return res.status(400).json({ message: "id inválido" });
     }
 
-    const { description, volumeCm3, tareMassG, collarMassG, status, reason } = req.body;
+    const { description, volumeCm3, tareMassG, collarMassG, heightMm, status, reason } = req.body;
 
     const data: any = {};
     if (description !== undefined) data.description = description;
     if (volumeCm3 !== undefined) data.volumeCm3 = Number(volumeCm3);
     if (tareMassG !== undefined) data.tareMassG = tareMassG === null ? null : Number(tareMassG);
     if (collarMassG !== undefined) data.collarMassG = collarMassG === null ? null : Number(collarMassG);
+    if (heightMm !== undefined) data.heightMm = heightMm === null ? null : Number(heightMm);
     if (status !== undefined) data.status = status;
 
     const before = await prisma.mold.findUnique({ where: { id } });

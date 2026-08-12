@@ -59,10 +59,11 @@ Estructura de carpetas (prisma/):
 - **N°40 = 0,425 mm** (ASTM E11, coincide con MOP — sin discrepancia normativa acá, a diferencia de N°4).
 - **N°200 = 0,075 mm** (0,08 mm también se acepta como redondeo en el código).
 - Los `sieveLabel` en la base de datos reales están en formato "pelado": `N4`, `N10`, `N40`, `N200` — sin símbolo `°` ni la letra `o` de "No". Cualquier matching de texto sobre `sieveLabel` debe considerar este formato explícitamente (ver `granulometryCalc.ts`).
+- **CBR (Índice de Soporte California) se norma por NCh1852.Of81** (no MOP 8.102.x). Procedimiento confirmado por el usuario 11-ago-2026: 3 puntos de compactación (12/25/56 golpes por capa, 5 capas), inmersión 4 días (96h) con lectura de hinchamiento, CBR de cada punto contra presiones patrón **70.3 kg/cm² (0.1")** y **105.5 kg/cm² (0.2")** — el mayor de los dos. El **CBR de diseño** se interpola al 95% de la DMCS del Proctor de la misma muestra (ver `cbrCalc.ts`).
 
 ## Deuda tecnica conocida (inventario, no resolver sin indicacion explicita)
 
-El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts.
+El unico motor de granulometria activo es src/utils/granulometryCalc.ts (implementa MOP 8.102.1 completo, formulas 6.2/6.3, desde 02-ago-2026). El unico motor de Proctor activo es src/utils/proctorCalc.ts, importado por proctor.service.ts. El unico motor de CBR activo es src/utils/cbrCalc.ts, importado por cbr.service.ts (NCh1852.Of81, desde 11-ago-2026) -- CBR depende de un Proctor ya existente de la misma muestra (proctorId obligatorio en Cbr) para el CBR de diseno al 95% DMCS.
 
 Modelos de Prisma sin implementar (existen en schema, sin controller ni rutas):
 - Alert, Attachment : reservados para funcionalidad futura, no tocar sin indicacion explicita del usuario.
@@ -74,6 +75,7 @@ Resueltos recientemente (referencia historica, ya no son deuda activa):
 - QA por fraccion MOP 8.102.1 (formulas 6.2/6.3, tolerancias 5.10) : resuelto 02-ago-2026, commit 26945b6.
 - Codigo muerto de granulometria (src/domain/granulometry/ completo + granulometryMassQa.ts, granulometryQa.ts, granulometrySieveQa.ts, uscsPrelim.ts) : eliminado 02-ago-2026, commit 6d579f1.
 - Control documental ISO 9001 (Document/DocumentRevision, ciclo UNDER_REVIEW/ACTIVE/OBSOLETE) : implementado 02-ago-2026, commit 41f47f7.
+- Ensayo CBR (Cbr/CbrPoint, NCh1852.Of81) : implementado 11-ago-2026, pendiente de commit. Extiende Mold con heightMm (necesario para swellPercent) -- moldsController ya acepta heightMm en create/update.
 
 Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los motores de calculo (granulometryCalc.ts, proctorCalc.ts, formula IP de Atterberg). Esperar indicacion explicita del usuario, no es evidente que haga falta, es una fase separada.
 
@@ -85,6 +87,7 @@ Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los m
 4. GitHub raw URLs tienen lag de cache de CDN (varios minutos post-commit). Verificar el SHA del commit antes de confiar en que raw.githubusercontent.com ya refleja el ultimo push.
 5. El editor web de GitHub requiere commit explicito. Si se edita ahi, hay que apretar el boton de commit o se pierde el cambio. Despues de editar por web, correr git fetch origin y git pull en el Codespace antes de verificar.
 6. moduleResolution node16 es la configuracion correcta en tsconfig.json para el cliente Prisma 6.x con output custom (usa exports map e imports con extension .js, incompatibles con node clasico).
+7. En Windows, matar un `npm run dev` corrido en background (ej. via TaskStop del harness) no siempre mata el proceso `node.exe` hijo real (npm spawnea un `node.exe` wrapper que a su vez spawnea el `node.exe` de ts-node) -- puede quedar huerfano, todavia bindeado al puerto, sirviendo codigo viejo sin ningun error visible (el proceso nuevo puede loguear "Server running" igual). Si despues de editar codigo y reiniciar el servidor los cambios no se reflejan en runtime, verificar con `Get-Process -Name node` y matar todo con `Stop-Process -Force` antes de reintentar.
 
 ## Comandos esenciales
 

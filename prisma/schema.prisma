@@ -64,6 +64,13 @@ enum ProctorStatus {
   NEEDS_REVIEW
 }
 
+// CBR
+enum CbrStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -122,6 +129,7 @@ model User {
   approvedProctors       Proctor[]      @relation("ProctorApprovedBy")
   approvedAtterbergs     Atterberg[]    @relation("AtterbergApprovedBy")
   approvedGranulometries Granulometry[] @relation("GranulometryApprovedBy")
+  approvedCbrs           Cbr[]          @relation("CbrApprovedBy")
 }
 
 //
@@ -162,6 +170,9 @@ model Sample {
 
   // Proctor: puede ser más de uno por muestra
   proctors Proctor[]
+
+  // CBR: puede ser más de uno por muestra
+  cbrs Cbr[]
 }
 
 //
@@ -473,6 +484,10 @@ model Mold {
   volumeCm3   Float // volumen nominal (cm³)
   tareMassG   Float? // masa molde (g)
   collarMassG Float? // masa collar (g) si aplica
+  // Altura de la probeta (mm). Opcional -- no aplica a moldes usados solo
+  // para Proctor, pero es obligatoria en la práctica para calcular
+  // swellPercent en CBR (NCh1852.Of81).
+  heightMm    Float?
   status      MoldStatus @default(ACTIVE)
 
   // Metrología / trazabilidad
@@ -481,6 +496,7 @@ model Mold {
 
   // Relaciones
   proctorPoints ProctorPoint[]
+  cbrPoints     CbrPoint[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -526,6 +542,8 @@ model Proctor {
 
   // Relaciones
   points ProctorPoint[]
+  // CBR que toma este Proctor como referencia de DMCS (95%)
+  cbrs   Cbr[]
 
   @@index([sampleId])
   @@index([status])
@@ -562,5 +580,97 @@ model ProctorPoint {
 
   @@unique([proctorId, order])
   @@index([proctorId])
+  @@index([moldId])
+}
+
+//
+// ─────────────────────────────────────
+//   CBR (Indice de Soporte California) - NCh1852.Of81
+// ─────────────────────────────────────
+//
+
+model Cbr {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  // Referencia obligatoria al Proctor de la misma muestra: el CBR de
+  // diseno se interpola al 95% de la DMCS (densidad maxima seca) de ese
+  // Proctor. Confirmado con el usuario 11-ago-2026.
+  proctorId Int
+  proctor   Proctor @relation(fields: [proctorId], references: [id])
+
+  methodCode String?   @default("NCh1852.Of81")
+  status     CbrStatus @default(DRAFT)
+
+  // Resultado final (interpolacion al 95% DMCS)
+  designCbrPercent Float?
+  curveJson        Json?
+
+  // Aprobación formal (ISO 17025)
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("CbrApprovedBy", fields: [approvedById], references: [id])
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relaciones
+  points CbrPoint[]
+
+  @@index([sampleId])
+  @@index([proctorId])
+}
+
+model CbrPoint {
+  id    Int @id @default(autoincrement())
+  cbrId Int
+  cbr   Cbr @relation(fields: [cbrId], references: [id], onDelete: Cascade)
+
+  // Mold elegido por catálogo (reusa el mismo catalogo que Proctor)
+  moldId Int
+  mold   Mold @relation(fields: [moldId], references: [id])
+
+  order         Int // 1..n
+  blowsPerLayer Int // energia de este punto (ej: 12/25/56 golpes)
+  layers        Int @default(5)
+
+  // INPUT operador -- compactacion (mismo patron que ProctorPoint)
+  wetMassMoldPlusSoilG Float // masa molde + suelo húmedo (g)
+
+  waterContentPercent Float?
+  tinTareG            Float?
+  tinWetG             Float?
+  tinDryG             Float?
+
+  // CALCULATED -- compactacion
+  wetDensity Float?
+  dryDensity Float?
+
+  // INPUT operador -- hinchamiento (inmersion 4 dias / 96h)
+  swellInitialDialMm Float?
+  swellFinalDialMm   Float?
+
+  // CALCULATED -- hinchamiento
+  swellPercent Float?
+
+  // INPUT operador -- penetracion (carga a 0.1" y 0.2", en kg/cm2)
+  loadAt01inKgCm2 Float?
+  loadAt02inKgCm2 Float?
+
+  // CALCULATED -- penetracion (contra presion patron NCh1852.Of81)
+  cbr01Percent Float?
+  cbr02Percent Float?
+  cbrPercent   Float?
+
+  qaFlags Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cbrId, order])
+  @@index([cbrId])
   @@index([moldId])
 }
