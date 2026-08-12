@@ -100,6 +100,26 @@ enum MoistureContentStatus {
   NEEDS_REVIEW
 }
 
+// Cono de Arena (MC Vol.8 §8.102.9, adaptacion de NCh1516-79)
+enum SandConeStatus {
+  ACTIVE
+  OUT_OF_SERVICE
+}
+
+// Dos equipos segun rango de particulas: convencional (6", <=50mm) vs
+// macrocono (12", 50-150mm). Determina el rango esperado de deposito y
+// balanza (validacion informativa, sin bloqueo).
+enum SandConeApparatusType {
+  CONVENTIONAL
+  MACRO
+}
+
+enum SandConeTestStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -161,6 +181,7 @@ model User {
   approvedCbrs              Cbr[]             @relation("CbrApprovedBy")
   approvedParticleDensities ParticleDensity[] @relation("ParticleDensityApprovedBy")
   approvedMoistureContents  MoistureContent[] @relation("MoistureContentApprovedBy")
+  approvedSandConeTests     SandConeTest[]    @relation("SandConeTestApprovedBy")
 }
 
 //
@@ -214,6 +235,10 @@ model Sample {
   // muestra. Diseñado para ser referenciado por otros ensayos futuros via
   // FK opcional (ej. Cono de Arena, moistureContentId) -- ver CLAUDE.md.
   moistureContents MoistureContent[]
+
+  // Cono de Arena (NCh1516.Of79): puede repetirse por muestra (un punto
+  // de ensayo de terreno por registro).
+  sandConeTests SandConeTest[]
 }
 
 //
@@ -841,5 +866,131 @@ model MoistureContent {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Ensayos que referencian esta determinacion de humedad por relacion
+  // (ej. Cono de Arena) en vez de calcularla internamente.
+  sandConeTests SandConeTest[]
+
   @@index([sampleId])
+}
+
+//
+// ─────────────────────────────────────
+//   CONO DE ARENA (instrumento) + DENSIDAD EN EL TERRENO
+//   MC Vol.8 §8.102.9 (jun-2022, adaptacion de NCh1516-79)
+// ─────────────────────────────────────
+//
+
+model SandCone {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique // ej: "CONO-01", "MACROCONO-01"
+  description String?
+
+  status SandConeStatus @default(ACTIVE)
+
+  // Tipo de aparato: cono convencional (6", <=50mm particulas) o
+  // macrocono (12", 50-150mm particulas). Obligatorio, sin default --
+  // determina que rango de deposito/balanza corresponde (validacion
+  // informativa, sin bloqueo, ver apparatusCoherenceWarning en el
+  // controller).
+  apparatusType SandConeApparatusType
+
+  // Datos informativos del aparato para la validacion cruzada de
+  // coherencia con apparatusType (sin bloqueo -- dato de catalogo, no
+  // tolerancia normativa numerica).
+  depositDiameterMm  Float? // 165mm convencional / 300mm macrocono
+  balanceResolutionG Float? // 1g convencional / 10g macrocono
+
+  // ── Calibracion 1: capacidad volumetrica del deposito (Vm) ──
+  // Se hace una sola vez por deposito, se reutiliza en las calibraciones
+  // de arena posteriores que usen ese mismo deposito. Vm se aproxima a
+  // 1 cm3 (§8.102.9).
+  depositMassWaterG   Float? // mw
+  depositWaterTempC   Float? // temperatura de esa calibracion
+  depositVolumeCm3    Float? // Vm = mw / ρw(tempC), redondeado a 1 cm3
+  depositCalibratedAt DateTime?
+
+  // ── Calibracion 2: densidad aparente de la arena de ensayo (ρA) ──
+  // 5 determinaciones completas, se promedian TODAS (no se descartan ni
+  // se eligen las 3 mas proximas). Criterio de aceptacion: variacion
+  // entre las 5 <= 1.5% -- si no se cumple, se rechaza el conjunto
+  // completo (bloqueante, 400). ρA final con 2 decimales. Fechada
+  // porque la arena se degrada con el tiempo.
+  sandDensityRawJson          Json? // las 5 determinaciones {order, maG, rhoAGcm3}
+  sandDensityVariationPercent Float? // variacion entre las 5 (debe ser <= 1.5%)
+  sandDensityGcm3             Float? // ρA final = promedio de las 5, 2 decimales
+  sandDensityCalibratedAt     DateTime?
+
+  // ── Calibracion 3: masa de arena que llena el cono/embudo (mC) ──
+  // Se repite 3 veces (no una sola vez). Criterio de aceptacion:
+  // variacion entre las 3 <= 1.0% -- si no se cumple, se rechaza
+  // (bloqueante, 400). mC final = promedio de las 3. Especifica a la
+  // combinacion aparato + tipo de arena.
+  funnelRawJson          Json? // las 3 determinaciones {order, miG, mfG, mCG}
+  funnelVariationPercent Float? // variacion entre las 3 (debe ser <= 1.0%)
+  funnelMassG            Float? // mC final = promedio de las 3
+  funnelCalibratedAt     DateTime?
+
+  tests SandConeTest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SandConeTest {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  sandConeId Int
+  sandCone   SandCone @relation(fields: [sandConeId], references: [id])
+
+  // Dependencia obligatoria: la humedad (ω) se lee de un MoistureContent
+  // ya existente, no se recibe como campo suelto. Debe pertenecer a la
+  // misma muestra (validado en el service). Idealmente ya aprobado, pero
+  // no se bloquea si no lo esta -- solo se exige que exista y tenga
+  // wPercent calculado (si no, el calculo de este ensayo queda con nota
+  // y sin resultado, mismo criterio que CBR con Proctor.mddDryDensity).
+  moistureContentId Int
+  moistureContent   MoistureContent @relation(fields: [moistureContentId], references: [id])
+
+  methodCode String?            @default("MC Vol.8 §8.102.9")
+  status     SandConeTestStatus @default(DRAFT)
+
+  // Tamaño minimo de excavacion segun tabla de la norma (informativo,
+  // sin validacion automatica -- dato de campo no verificable por
+  // software).
+  minExcavationVolumeCm3 Float?
+
+  // INPUT operador (mismos simbolos que la norma: mti/mtf, no mi/mf --
+  // para no confundir con las determinaciones de calibracion mI/mF)
+  mtiG Float // masa aparato + arena, antes de llenar la perforacion
+  mtfG Float // masa aparato + arena, despues de llenar la perforacion
+  mhG  Float // masa del material humedo extraido de la perforacion
+
+  // CALCULATED
+  mpG            Float? // mp = (mti - mtf) - mC (arena efectivamente en la perforacion)
+  msG            Float? // ms = mh / (1 + ω/100)
+  volumeCm3      Float? // Vp = mp / ρA
+  dryDensityGcm3 Float? // ρd = ms / Vp (resultado principal)
+  wetDensityGcm3 Float? // ρh = mh / Vp (informativo)
+
+  calcNote String?
+
+  // Aprobación formal (ISO 17025) -- sin qaStatus bloqueante en el
+  // resultado de campo: la norma no define tolerancia de aceptacion para
+  // ρd (las tolerancias explicitas de la norma aplican a la calibracion
+  // de la arena y el embudo, ver SandCone, no al resultado de este
+  // ensayo).
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("SandConeTestApprovedBy", fields: [approvedById], references: [id])
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sampleId])
+  @@index([sandConeId])
+  @@index([moistureContentId])
 }
