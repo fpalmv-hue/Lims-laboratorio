@@ -19,6 +19,7 @@ import particleDensityRoutes from "./routes/particleDensity.routes";
 import moistureContentRoutes from "./routes/moistureContent.routes";
 import sandConeRoutes from "./routes/sandCone.routes";
 import sandConeTestRoutes from "./routes/sandConeTest.routes";
+import gravelDensityRoutes from "./routes/gravelDensity.routes";
 import documentRoutes from "./routes/document.routes";
 import { CORS_ORIGINS } from "./config/env";
 
@@ -82,6 +83,7 @@ app.use("/api/particle-densities", particleDensityRoutes);
 app.use("/api/moisture-contents", moistureContentRoutes);
 app.use("/api/sand-cones", sandConeRoutes);
 app.use("/api/sand-cone-tests", sandConeTestRoutes);
+app.use("/api/gravel-densities", gravelDensityRoutes);
 app.use("/api/documents", documentRoutes);
 
 // Inicio de servidor

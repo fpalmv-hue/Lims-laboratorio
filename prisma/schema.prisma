@@ -120,6 +120,20 @@ enum SandConeTestStatus {
   NEEDS_REVIEW
 }
 
+// Densidad Neta / Real de Gravas (NCh1117.Of2010). PRIMERA EXCEPCION a la
+// regla de "un ensayo pertenece a una sola area": la norma es
+// normativamente de aridos para hormigon (CONCRETE_AGGREGATES), pero el
+// laboratorio tambien la usa para la fraccion >5mm de muestras de suelo
+// (resuelve la deuda tecnica de Densidad de Particulas Solidas). Guard
+// acepta SOIL_MECHANICS o CONCRETE_AGGREGATES. Confirmado con el usuario
+// 12-ago-2026 -- no replicar esta excepcion a otros ensayos sin
+// confirmacion explicita, sigue siendo el unico caso.
+enum GravelDensityStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -182,6 +196,7 @@ model User {
   approvedParticleDensities ParticleDensity[] @relation("ParticleDensityApprovedBy")
   approvedMoistureContents  MoistureContent[] @relation("MoistureContentApprovedBy")
   approvedSandConeTests     SandConeTest[]    @relation("SandConeTestApprovedBy")
+  approvedGravelDensities   GravelDensity[]   @relation("GravelDensityApprovedBy")
 }
 
 //
@@ -239,6 +254,11 @@ model Sample {
   // Cono de Arena (NCh1516.Of79): puede repetirse por muestra (un punto
   // de ensayo de terreno por registro).
   sandConeTests SandConeTest[]
+
+  // Densidad Neta / Real de Gravas (NCh1117.Of2010): unico ensayo valido
+  // para dos areas (SOIL_MECHANICS y CONCRETE_AGGREGATES), ver guard en
+  // gravelDensity.service.ts.
+  gravelDensities GravelDensity[]
 }
 
 //
@@ -993,4 +1013,80 @@ model SandConeTest {
   @@index([sampleId])
   @@index([sandConeId])
   @@index([moistureContentId])
+}
+
+//
+// ─────────────────────────────────────
+//   DENSIDAD NETA / REAL DE GRAVAS
+//   NCh1117.Of2010
+// ─────────────────────────────────────
+//
+
+model GravelDensity {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  methodCode String?             @default("NCh1117.Of2010")
+  status     GravelDensityStatus @default(DRAFT)
+
+  // Tamaño maximo nominal del arido (Tabla 1 de la norma define masa
+  // minima de muestra segun este valor) -- informativo, sin bloqueo.
+  maxNominalSizeMm Float?
+
+  // La norma exige "muestras gemelas" (dos determinaciones independientes
+  // A/B/C, mismos simbolos que la norma):
+  //   A = masa sumergida (SSS menos agua desplazada)
+  //   B = masa saturada superficialmente seca (SSS), al aire
+  //   C = masa seca al horno, al aire
+  aG1 Float
+  bG1 Float
+  cG1 Float
+
+  aG2 Float
+  bG2 Float
+  cG2 Float
+
+  // CALCULATED por muestra gemela (aproximado a 1 kg/m3, norma 10.1)
+  realSssDensity1Kgm3 Float? // ρRsss,1 = B1/(B1-A1) * 1000
+  realDryDensity1Kgm3 Float? // ρRS,1 = C1/(B1-A1) * 1000
+  netDensity1Kgm3     Float? // ρN,1 = C1/(C1-A1) * 1000
+  absorption1Percent  Float? // (B1-C1)/C1 * 100
+
+  realSssDensity2Kgm3 Float?
+  realDryDensity2Kgm3 Float?
+  netDensity2Kgm3     Float?
+  absorption2Percent  Float?
+
+  // Diferencias entre gemelas -- tolerancia bloqueante de la norma
+  // (10.3.1): <= 30 kg/m3 en cada densidad, <= 0.3% en absorcion. Si se
+  // excede, la creacion/edicion se rechaza con 400 (ensayar dos muestras
+  // gemelas nuevas).
+  realSssDensityDiffKgm3 Float?
+  realDryDensityDiffKgm3 Float?
+  netDensityDiffKgm3     Float?
+  absorptionDiffPercent  Float?
+
+  // CALCULATED final = promedio aritmetico de ambas gemelas (norma 11:
+  // densidades aprox. a 10 kg/m3, absorcion a 0.1%)
+  realSssDensityKgm3 Float?
+  realDryDensityKgm3 Float?
+  netDensityKgm3     Float?
+  absorptionPercent  Float?
+
+  calcNote String?
+
+  // Aprobación formal (ISO 17025). Sin qaStatus adicional: la tolerancia
+  // de la norma ya actua como bloqueo duro en create/update (arriba), no
+  // hace falta un segundo criterio de calidad sobre el resultado final.
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("GravelDensityApprovedBy", fields: [approvedById], references: [id])
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sampleId])
 }
