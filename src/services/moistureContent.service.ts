@@ -19,6 +19,7 @@ import prisma from "../prismaClient";
 import { calculateMoistureContentFromDb } from "../utils/moistureCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -58,6 +59,7 @@ export async function createMoistureContentService(params: {
     msG: number;
     dryingTempC: number;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -67,14 +69,18 @@ export async function createMoistureContentService(params: {
   const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
   if (!sample) return err(404, "Muestra no encontrada.");
 
-  // CRITICO: Determinacion de Humedad es un ensayo de mecanica de suelos.
-  // No debe crearse sobre una muestra de otra area del laboratorio.
   if (sample.area !== "SOIL_MECHANICS") {
     return err(
       400,
       `Determinacion de Humedad es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`
     );
   }
+
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
 
   const { methodCode, mrG, mhG, msG, dryingTempC, notes } = params.body ?? ({} as any);
 
@@ -85,17 +91,29 @@ export async function createMoistureContentService(params: {
     return err(400, "dryingTempC es obligatorio y debe ser numérico.");
   }
 
-  const created = await prisma.moistureContent.create({
-    data: {
-      sampleId,
-      methodCode: methodCode ?? "MC Vol.8 §8.102.2",
-      mrG: Number(mrG),
-      mhG: Number(mhG),
-      msG: Number(msG),
-      dryingTempC: Number(dryingTempC),
-      notes: notes ?? null,
-      status: "DRAFT",
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const mc = await tx.moistureContent.create({
+      data: {
+        sampleId,
+        methodCode: methodCode ?? "MC Vol.8 §8.102.2",
+        mrG: Number(mrG),
+        mhG: Number(mhG),
+        msG: Number(msG),
+        dryingTempC: Number(dryingTempC),
+        notes: notes ?? null,
+        status: "DRAFT",
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "MOISTURE_CONTENT",
+          entityId: mc.id,
+        })),
+      });
+    }
+    return mc;
   });
 
   await registerAudit({
@@ -104,7 +122,7 @@ export async function createMoistureContentService(params: {
     entityType: "MoistureContent",
     entityId: created.id,
     previousValue: null,
-    newValue: created,
+    newValue: { ...created, equipmentIds },
   });
 
   const updated = await runCalcAndSave(created.id);
@@ -121,7 +139,15 @@ export async function getMoistureContentByIdService(idRaw: unknown): Promise<Ser
 
   const mc = await prisma.moistureContent.findUnique({ where: { id } });
   if (!mc) return err(404, "Determinación de Humedad no encontrada.");
-  return { data: mc };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "MOISTURE_CONTENT", entityId: id },
+    include: {
+      equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+    },
+  });
+
+  return { data: { ...mc, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------
