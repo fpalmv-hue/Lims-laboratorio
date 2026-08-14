@@ -19,6 +19,7 @@ import prisma from "../prismaClient";
 import { computeGravelDensityFromTwins } from "../utils/gravelDensityCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -86,6 +87,7 @@ export async function createGravelDensityService(params: {
     bG2: number;
     cG2: number;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -95,14 +97,19 @@ export async function createGravelDensityService(params: {
   const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
   if (!sample) return err(404, "Muestra no encontrada.");
 
-  // CRITICO: unico ensayo valido para dos areas (SOIL_MECHANICS y
-  // CONCRETE_AGGREGATES) -- ver nota normativa en schema.prisma.
   if (!VALID_AREAS.includes(sample.area)) {
     return err(
       400,
       `Densidad Neta/Real de Gravas (NCh1117.Of2010) es válido para muestras de SOIL_MECHANICS o CONCRETE_AGGREGATES. La muestra ${sample.code} pertenece al area ${sample.area}.`
     );
   }
+
+  // Guard ISO 17025: todos los equipos declarados deben estar vigentes.
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
 
   const { methodCode, maxNominalSizeMm, aG1, bG1, cG1, aG2, bG2, cG2, notes } = params.body ?? ({} as any);
 
@@ -120,20 +127,33 @@ export async function createGravelDensityService(params: {
   });
   if (!calc.ok) return err(400, calc.error);
 
-  const created = await prisma.gravelDensity.create({
-    data: {
-      sampleId,
-      methodCode: methodCode ?? "NCh1117.Of2010",
-      maxNominalSizeMm: maxNominalSizeMm ?? null,
-      aG1: Number(aG1),
-      bG1: Number(bG1),
-      cG1: Number(cG1),
-      aG2: Number(aG2),
-      bG2: Number(bG2),
-      cG2: Number(cG2),
-      notes: notes ?? null,
-      ...calc.data,
-    },
+  // Creación atómica: ensayo + EquipmentUsage en una transacción.
+  const created = await prisma.$transaction(async (tx) => {
+    const gd = await tx.gravelDensity.create({
+      data: {
+        sampleId,
+        methodCode: methodCode ?? "NCh1117.Of2010",
+        maxNominalSizeMm: maxNominalSizeMm ?? null,
+        aG1: Number(aG1),
+        bG1: Number(bG1),
+        cG1: Number(cG1),
+        aG2: Number(aG2),
+        bG2: Number(bG2),
+        cG2: Number(cG2),
+        notes: notes ?? null,
+        ...calc.data,
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "GRAVEL_DENSITY",
+          entityId: gd.id,
+        })),
+      });
+    }
+    return gd;
   });
 
   await registerAudit({
@@ -142,7 +162,7 @@ export async function createGravelDensityService(params: {
     entityType: "GravelDensity",
     entityId: created.id,
     previousValue: null,
-    newValue: created,
+    newValue: { ...created, equipmentIds },
   });
 
   return { data: created };
@@ -157,7 +177,17 @@ export async function getGravelDensityByIdService(idRaw: unknown): Promise<Servi
 
   const gd = await prisma.gravelDensity.findUnique({ where: { id } });
   if (!gd) return err(404, "Densidad Neta/Real de Gravas no encontrada.");
-  return { data: gd };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "GRAVEL_DENSITY", entityId: id },
+    include: {
+      equipment: {
+        select: { id: true, code: true, type: true, category: true, status: true },
+      },
+    },
+  });
+
+  return { data: { ...gd, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------
