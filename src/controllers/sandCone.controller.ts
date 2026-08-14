@@ -1,20 +1,18 @@
 // src/controllers/sandCone.controller.ts
 //
-// Catalogo de conos de arena como instrumento trazable, mismo patron que
-// molds.controller.ts / pycnometer.controller.ts: create/update para
-// datos generales, y calibracion como evento(s) formal(es) separado(s).
+// Catálogo de conos de arena como instrumento trazable.
+// Refactorizado en Phase 1 Equipment (14-ago-2026):
+// - code/status viven en Equipment padre (1:1).
+// - Crear SandCone = crear Equipment + SandCone en transacción.
+// - calibrate-deposit: suma depositVerificationDueAt (+6 meses).
+// - calibrate-sand: suma sandDensityVerificationDueAt (+3 meses).
+// - calibrate-funnel: sin verificationDueAt (periodicidad pendiente).
 //
-// MC Vol.8 §8.102.9 define TRES calibraciones independientes con datos
-// de forma distinta (deposito, densidad de arena, embudo) -- se separan
-// en tres endpoints en vez de forzarlas a un unico shape de body.
-//
-// Dos equipos (apparatusType CONVENTIONAL/MACRO) con rangos esperados de
-// deposito/balanza distintos -- la coherencia se valida como warning
-// informativo, no bloqueante (no es una tolerancia numerica normativa,
-// es un dato de catalogo de hardware).
+// MC Vol.8 §8.102.9: TRES calibraciones independientes con datos de
+// forma distinta (deposito, densidad de arena, embudo) -- tres endpoints
+// separados porque cada shape de body es incompatible con los otros.
 import { Response } from "express";
 import prisma from "../prismaClient";
-import { SandConeStatus } from "../generated/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
 import {
@@ -23,9 +21,16 @@ import {
   computeFunnelCalibration,
 } from "../utils/sandConeCalc";
 
+/** Agrega N meses calendario a una fecha. */
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
 // Rangos esperados de hardware por tipo de aparato (informativo, §8.102.9
-// tabla de equipos). No son tolerancias numericas de ensayo -- solo
-// generan un warning en el response, nunca bloquean con 400.
+// tabla de equipos). No son tolerancias numericas de ensayo -- generan
+// solo un warning en el response, nunca bloquean con 400.
 const APPARATUS_SPECS: Record<
   string,
   { depositDiameterMm: number; balanceResolutionG: number; depositVolumeRangeCm3: [number, number] }
@@ -84,8 +89,9 @@ export async function listSandCones(req: AuthRequest, res: Response) {
     const onlyActive = String(req.query.active ?? "true") === "true";
 
     const sandCones = await prisma.sandCone.findMany({
-      where: onlyActive ? { status: SandConeStatus.ACTIVE } : undefined,
-      orderBy: { code: "asc" },
+      include: { equipment: true },
+      where: onlyActive ? { equipment: { status: "ACTIVE" } } : undefined,
+      orderBy: { equipment: { code: "asc" } },
     });
 
     return res.status(200).json({ message: "OK", data: sandCones });
@@ -105,7 +111,10 @@ export async function getSandConeById(req: AuthRequest, res: Response) {
       return res.status(400).json({ message: "id inválido" });
     }
 
-    const sandCone = await prisma.sandCone.findUnique({ where: { id } });
+    const sandCone = await prisma.sandCone.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!sandCone) return res.status(404).json({ message: "Cono de arena no encontrado" });
 
     return res.status(200).json({ message: "OK", data: sandCone });
@@ -117,6 +126,9 @@ export async function getSandConeById(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // POST /api/sand-cones
+// Crea Equipment + SandCone en transacción atómica.
+// Body: { code, description?, apparatusType, depositDiameterMm?,
+//         balanceResolutionG?, status? }
 // ----------------------------------------------------
 export async function createSandCone(req: AuthRequest, res: Response) {
   try {
@@ -133,37 +145,52 @@ export async function createSandCone(req: AuthRequest, res: Response) {
     if (apparatusType !== "CONVENTIONAL" && apparatusType !== "MACRO") {
       return res.status(400).json({ message: "apparatusType es obligatorio: CONVENTIONAL o MACRO." });
     }
-
-    const existing = await prisma.sandCone.findUnique({ where: { code: code.trim() } });
-    if (existing) {
-      return res.status(409).json({ message: "Ya existe un cono de arena con ese código." });
+    if (status !== undefined && status !== "ACTIVE" && status !== "OUT_OF_SERVICE") {
+      return res.status(400).json({ message: "status debe ser ACTIVE o OUT_OF_SERVICE" });
     }
 
-    const sandCone = await prisma.sandCone.create({
-      data: {
-        code: code.trim(),
-        description: description ?? null,
-        apparatusType,
-        depositDiameterMm: depositDiameterMm ?? null,
-        balanceResolutionG: balanceResolutionG ?? null,
-        status: status ?? SandConeStatus.ACTIVE,
-      },
+    const existingEquipment = await prisma.equipment.findUnique({ where: { code: code.trim() } });
+    if (existingEquipment) {
+      return res.status(409).json({ message: "Ya existe un equipo con ese código." });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const equipment = await tx.equipment.create({
+        data: {
+          code: code.trim(),
+          type: "SAND_CONE",
+          category: "NORMATIVE",
+          status: status ?? "ACTIVE",
+          description: description ?? null,
+        },
+      });
+      const sandCone = await tx.sandCone.create({
+        data: {
+          equipmentId: equipment.id,
+          description: description ?? null,
+          apparatusType,
+          depositDiameterMm: depositDiameterMm ?? null,
+          balanceResolutionG: balanceResolutionG ?? null,
+        },
+        include: { equipment: true },
+      });
+      return sandCone;
     });
 
     await registerAudit({
       userId,
       action: "CREATE",
       entityType: "SandCone",
-      entityId: sandCone.id,
+      entityId: result.id,
       previousValue: null,
-      newValue: sandCone,
+      newValue: result,
     });
 
-    const warning = apparatusCoherenceWarning(sandCone);
+    const warning = apparatusCoherenceWarning(result);
 
     return res
       .status(201)
-      .json({ message: "Cono de arena creado", data: sandCone, ...(warning ? { warning } : {}) });
+      .json({ message: "Cono de arena creado", data: result, ...(warning ? { warning } : {}) });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });
@@ -172,7 +199,7 @@ export async function createSandCone(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // PUT /api/sand-cones/:id
-// Edición de datos generales (no calibración).
+// status → Equipment. Otros campos → SandCone.
 // ----------------------------------------------------
 export async function updateSandCone(req: AuthRequest, res: Response) {
   try {
@@ -191,22 +218,39 @@ export async function updateSandCone(req: AuthRequest, res: Response) {
     if (apparatusType !== undefined && apparatusType !== "CONVENTIONAL" && apparatusType !== "MACRO") {
       return res.status(400).json({ message: "apparatusType debe ser CONVENTIONAL o MACRO." });
     }
-
-    const data: any = {};
-    if (description !== undefined) data.description = description;
-    if (apparatusType !== undefined) data.apparatusType = apparatusType;
-    if (depositDiameterMm !== undefined) {
-      data.depositDiameterMm = depositDiameterMm === null ? null : Number(depositDiameterMm);
+    if (status !== undefined && status !== "ACTIVE" && status !== "OUT_OF_SERVICE") {
+      return res.status(400).json({ message: "status debe ser ACTIVE o OUT_OF_SERVICE" });
     }
-    if (balanceResolutionG !== undefined) {
-      data.balanceResolutionG = balanceResolutionG === null ? null : Number(balanceResolutionG);
-    }
-    if (status !== undefined) data.status = status;
 
-    const before = await prisma.sandCone.findUnique({ where: { id } });
+    const before = await prisma.sandCone.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Cono de arena no encontrado" });
 
-    const updated = await prisma.sandCone.update({ where: { id }, data });
+    const coneData: any = {};
+    if (description !== undefined) coneData.description = description;
+    if (apparatusType !== undefined) coneData.apparatusType = apparatusType;
+    if (depositDiameterMm !== undefined) {
+      coneData.depositDiameterMm = depositDiameterMm === null ? null : Number(depositDiameterMm);
+    }
+    if (balanceResolutionG !== undefined) {
+      coneData.balanceResolutionG = balanceResolutionG === null ? null : Number(balanceResolutionG);
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (status !== undefined) {
+        await tx.equipment.update({
+          where: { id: before.equipmentId },
+          data: { status },
+        });
+      }
+      return tx.sandCone.update({
+        where: { id },
+        data: coneData,
+        include: { equipment: true },
+      });
+    });
 
     await registerAudit({
       userId,
@@ -234,7 +278,7 @@ export async function updateSandCone(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // POST /api/sand-cones/:id/calibrate-deposit
-// Calibracion 1: Vm = mw / ρw(tempC) (tabla 8.102.9.A), aproximado a 1cm3
+// Calibracion 1: Vm = mw / ρw(tempC). Verificacion interna 6 meses.
 // ----------------------------------------------------
 export async function calibrateSandConeDeposit(req: AuthRequest, res: Response) {
   try {
@@ -257,7 +301,10 @@ export async function calibrateSandConeDeposit(req: AuthRequest, res: Response) 
       return res.status(400).json({ message: "waterTempC es obligatorio y debe ser numérico" });
     }
 
-    const before = await prisma.sandCone.findUnique({ where: { id } });
+    const before = await prisma.sandCone.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Cono de arena no encontrado" });
 
     const { volumeCm3, note } = computeDepositVolume({
@@ -269,31 +316,39 @@ export async function calibrateSandConeDeposit(req: AuthRequest, res: Response) 
       return res.status(400).json({ message: note });
     }
 
+    const depositCalibratedAt = calibratedAt ? new Date(calibratedAt) : new Date();
+    // Verificacion interna deposito/cono: periodicidad 6 meses (Felipe).
+    const depositVerificationDueAt = addMonths(depositCalibratedAt, 6);
+
     const updated = await prisma.sandCone.update({
       where: { id },
       data: {
         depositMassWaterG: Number(massWaterG),
         depositWaterTempC: Number(waterTempC),
         depositVolumeCm3: volumeCm3,
-        depositCalibratedAt: calibratedAt ? new Date(calibratedAt) : new Date(),
+        depositCalibratedAt,
+        depositVerificationDueAt,
       },
+      include: { equipment: true },
     });
 
     await registerAudit({
       userId,
-      action: "CALIBRATE",
+      action: "VERIFY",
       entityType: "SandCone",
       entityId: updated.id,
       previousValue: before,
       newValue: updated,
-      reason: reason ?? "Calibracion de deposito (Vm)",
+      reason: reason ?? "Calibracion de deposito (Vm) — verificacion interna 6 meses",
     });
 
     const warning = apparatusCoherenceWarning(updated);
 
-    return res
-      .status(200)
-      .json({ message: "Calibración de depósito (Vm) registrada", data: updated, ...(warning ? { warning } : {}) });
+    return res.status(200).json({
+      message: "Calibración de depósito (Vm) registrada",
+      data: updated,
+      ...(warning ? { warning } : {}),
+    });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });
@@ -302,8 +357,8 @@ export async function calibrateSandConeDeposit(req: AuthRequest, res: Response) 
 
 // ----------------------------------------------------
 // POST /api/sand-cones/:id/calibrate-sand
-// Calibracion 2: ρA -- 5 determinaciones, se promedian TODAS. Tolerancia
-// bloqueante: variacion entre las 5 <= 1.5% (§8.102.9).
+// Calibracion 2: ρA. Tolerancia bloqueante: variacion <= 1.5%.
+// Verificacion interna 3 meses (arena normalizada, confirmado Felipe).
 // ----------------------------------------------------
 export async function calibrateSandConeSand(req: AuthRequest, res: Response) {
   try {
@@ -329,7 +384,10 @@ export async function calibrateSandConeSand(req: AuthRequest, res: Response) {
         .json({ message: "maValuesG es obligatorio: un arreglo de exactamente 5 masas numéricas (g)." });
     }
 
-    const before = await prisma.sandCone.findUnique({ where: { id } });
+    const before = await prisma.sandCone.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Cono de arena no encontrado" });
 
     if (before.depositVolumeCm3 === null || before.depositVolumeCm3 === undefined) {
@@ -350,27 +408,35 @@ export async function calibrateSandConeSand(req: AuthRequest, res: Response) {
       });
     }
 
+    const sandDensityCalibratedAt = calibratedAt ? new Date(calibratedAt) : new Date();
+    // Verificacion interna arena normalizada: periodicidad 3 meses (Felipe).
+    const sandDensityVerificationDueAt = addMonths(sandDensityCalibratedAt, 3);
+
     const updated = await prisma.sandCone.update({
       where: { id },
       data: {
         sandDensityRawJson: calc.raw as any,
         sandDensityGcm3: calc.sandDensityGcm3,
         sandDensityVariationPercent: calc.variationPercent,
-        sandDensityCalibratedAt: calibratedAt ? new Date(calibratedAt) : new Date(),
+        sandDensityCalibratedAt,
+        sandDensityVerificationDueAt,
       },
+      include: { equipment: true },
     });
 
     await registerAudit({
       userId,
-      action: "CALIBRATE",
+      action: "VERIFY",
       entityType: "SandCone",
       entityId: updated.id,
       previousValue: before,
       newValue: updated,
-      reason: reason ?? "Calibracion de densidad de arena (ρA)",
+      reason: reason ?? "Calibracion de densidad de arena (ρA) — verificacion interna 3 meses",
     });
 
-    return res.status(200).json({ message: "Calibración de densidad de arena (ρA) registrada", data: updated });
+    return res
+      .status(200)
+      .json({ message: "Calibración de densidad de arena (ρA) registrada", data: updated });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });
@@ -379,8 +445,8 @@ export async function calibrateSandConeSand(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // POST /api/sand-cones/:id/calibrate-funnel
-// Calibracion 3: mC -- 3 determinaciones (mI/mF cada una), se promedian
-// las 3. Tolerancia bloqueante: variacion entre las 3 <= 1.0% (§8.102.9).
+// Calibracion 3: mC. 3 determinaciones. Tolerancia <= 1.0%.
+// Periodicidad AUN NO DEFINIDA -- no se calcula verificationDueAt.
 // ----------------------------------------------------
 export async function calibrateSandConeFunnel(req: AuthRequest, res: Response) {
   try {
@@ -409,7 +475,10 @@ export async function calibrateSandConeFunnel(req: AuthRequest, res: Response) {
       });
     }
 
-    const before = await prisma.sandCone.findUnique({ where: { id } });
+    const before = await prisma.sandCone.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Cono de arena no encontrado" });
 
     const calc = computeFunnelCalibration({
@@ -433,7 +502,10 @@ export async function calibrateSandConeFunnel(req: AuthRequest, res: Response) {
         funnelMassG: calc.funnelMassG,
         funnelVariationPercent: calc.variationPercent,
         funnelCalibratedAt: calibratedAt ? new Date(calibratedAt) : new Date(),
+        // verificationDueAt NO calculado: periodicidad del embudo aun no
+        // definida por Felipe. Ver CLAUDE.md seccion 4.
       },
+      include: { equipment: true },
     });
 
     await registerAudit({
@@ -446,7 +518,9 @@ export async function calibrateSandConeFunnel(req: AuthRequest, res: Response) {
       reason: reason ?? "Calibracion de masa de arena del cono/embudo (mC)",
     });
 
-    return res.status(200).json({ message: "Calibración de embudo (mC) registrada", data: updated });
+    return res
+      .status(200)
+      .json({ message: "Calibración de embudo (mC) registrada", data: updated });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });

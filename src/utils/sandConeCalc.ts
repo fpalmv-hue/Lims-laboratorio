@@ -200,7 +200,7 @@ export async function calculateSandConeTestFromDb(
 ): Promise<SandConeTestCalcResult> {
   const test = await prisma.sandConeTest.findUnique({
     where: { id: sandConeTestId },
-    include: { sandCone: true, moistureContent: true },
+    include: { sandCone: { include: { equipment: true } }, moistureContent: true },
   });
 
   const empty = (note: string): SandConeTestCalcResult => ({
@@ -223,7 +223,7 @@ export async function calculateSandConeTestFromDb(
   const rhoA = test.sandCone.sandDensityGcm3;
   if (mC === null || mC === undefined || rhoA === null || rhoA === undefined) {
     return empty(
-      `El SandCone ${test.sandCone.code} todavia no tiene calibracion completa de embudo (mC) y/o densidad de arena (ρA).`
+      `El SandCone ${test.sandCone.equipment.code} todavia no tiene calibracion completa de embudo (mC) y/o densidad de arena (ρA).`
     );
   }
 

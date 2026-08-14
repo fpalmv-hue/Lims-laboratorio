@@ -1,15 +1,26 @@
 // src/controllers/pycnometer.controller.ts
 //
-// Catalogo de picnometros como instrumento trazable, mismo patron que
-// molds.controller.ts: create/update para datos generales, calibrate
-// como evento formal separado (Mf, Ma(ti), ti se registran una sola vez
-// y se reutilizan en todos los ensayos de Densidad de Particulas Solidas
-// que usen ese picnometro).
+// Catálogo de picnómetros como instrumento trazable.
+// Mismo patrón que molds.controller.ts tras la refactorización
+// Equipment (Phase 1, 14-ago-2026):
+// - code/status viven en Equipment padre (1:1).
+// - Crear Pycnometer = crear Equipment + Pycnometer en transacción.
+// - /calibrate registra los valores Mf/Ma(ti)/ti en Pycnometer
+//   (los usa particleDensityCalc.ts directamente) y además actualiza
+//   Pycnometer.lastVerificationAt/verificationDueAt (6 meses, Felipe).
+//   Sigue llamándose /calibrate porque en el contexto del picnómetro
+//   "calibrar" = medir Mf/Ma(ti)/ti, no certificación externa.
 import { Response } from "express";
 import prisma from "../prismaClient";
-import { PycnometerStatus } from "../generated/prisma";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
+
+/** Agrega N meses calendario a una fecha. */
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
 
 // ----------------------------------------------------
 // GET /api/pycnometers?active=true
@@ -19,8 +30,9 @@ export async function listPycnometers(req: AuthRequest, res: Response) {
     const onlyActive = String(req.query.active ?? "true") === "true";
 
     const pycnometers = await prisma.pycnometer.findMany({
-      where: onlyActive ? { status: PycnometerStatus.ACTIVE } : undefined,
-      orderBy: { code: "asc" },
+      include: { equipment: true },
+      where: onlyActive ? { equipment: { status: "ACTIVE" } } : undefined,
+      orderBy: { equipment: { code: "asc" } },
     });
 
     return res.status(200).json({ message: "OK", data: pycnometers });
@@ -40,7 +52,10 @@ export async function getPycnometerById(req: AuthRequest, res: Response) {
       return res.status(400).json({ message: "id inválido" });
     }
 
-    const pycnometer = await prisma.pycnometer.findUnique({ where: { id } });
+    const pycnometer = await prisma.pycnometer.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!pycnometer) return res.status(404).json({ message: "Picnometro no encontrado" });
 
     return res.status(200).json({ message: "OK", data: pycnometer });
@@ -52,6 +67,8 @@ export async function getPycnometerById(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // POST /api/pycnometers
+// Crea Equipment + Pycnometer en transacción atómica.
+// Body: { code, description?, containerType?, nominalCapacityMl?, status? }
 // ----------------------------------------------------
 export async function createPycnometer(req: AuthRequest, res: Response) {
   try {
@@ -65,35 +82,50 @@ export async function createPycnometer(req: AuthRequest, res: Response) {
     if (!code || typeof code !== "string" || !code.trim()) {
       return res.status(400).json({ message: "code es obligatorio" });
     }
-
-    const existing = await prisma.pycnometer.findUnique({ where: { code: code.trim() } });
-    if (existing) {
-      return res.status(409).json({ message: "Ya existe un picnometro con ese código." });
+    if (status !== undefined && status !== "ACTIVE" && status !== "OUT_OF_SERVICE") {
+      return res.status(400).json({ message: "status debe ser ACTIVE o OUT_OF_SERVICE" });
     }
 
-    const pycnometer = await prisma.pycnometer.create({
-      data: {
-        code: code.trim(),
-        description: description ?? null,
-        containerType: containerType ?? null,
-        nominalCapacityMl:
-          nominalCapacityMl !== undefined && nominalCapacityMl !== null
-            ? Number(nominalCapacityMl)
-            : null,
-        status: status ?? PycnometerStatus.ACTIVE,
-      },
+    const existingEquipment = await prisma.equipment.findUnique({ where: { code: code.trim() } });
+    if (existingEquipment) {
+      return res.status(409).json({ message: "Ya existe un equipo con ese código." });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const equipment = await tx.equipment.create({
+        data: {
+          code: code.trim(),
+          type: "PYCNOMETER",
+          category: "NORMATIVE",
+          status: status ?? "ACTIVE",
+          description: description ?? null,
+        },
+      });
+      const pycnometer = await tx.pycnometer.create({
+        data: {
+          equipmentId: equipment.id,
+          description: description ?? null,
+          containerType: containerType ?? null,
+          nominalCapacityMl:
+            nominalCapacityMl !== undefined && nominalCapacityMl !== null
+              ? Number(nominalCapacityMl)
+              : null,
+        },
+        include: { equipment: true },
+      });
+      return pycnometer;
     });
 
     await registerAudit({
       userId,
       action: "CREATE",
       entityType: "Pycnometer",
-      entityId: pycnometer.id,
+      entityId: result.id,
       previousValue: null,
-      newValue: pycnometer,
+      newValue: result,
     });
 
-    return res.status(201).json({ message: "Picnometro creado", data: pycnometer });
+    return res.status(201).json({ message: "Picnometro creado", data: result });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });
@@ -102,7 +134,7 @@ export async function createPycnometer(req: AuthRequest, res: Response) {
 
 // ----------------------------------------------------
 // PUT /api/pycnometers/:id
-// Edición de datos generales (no calibración -- ver calibratePycnometer).
+// Edita datos del picnómetro. status → Equipment.
 // ----------------------------------------------------
 export async function updatePycnometer(req: AuthRequest, res: Response) {
   try {
@@ -118,18 +150,36 @@ export async function updatePycnometer(req: AuthRequest, res: Response) {
 
     const { description, containerType, nominalCapacityMl, status, reason } = req.body;
 
-    const data: any = {};
-    if (description !== undefined) data.description = description;
-    if (containerType !== undefined) data.containerType = containerType;
-    if (nominalCapacityMl !== undefined) {
-      data.nominalCapacityMl = nominalCapacityMl === null ? null : Number(nominalCapacityMl);
+    if (status !== undefined && status !== "ACTIVE" && status !== "OUT_OF_SERVICE") {
+      return res.status(400).json({ message: "status debe ser ACTIVE o OUT_OF_SERVICE" });
     }
-    if (status !== undefined) data.status = status;
 
-    const before = await prisma.pycnometer.findUnique({ where: { id } });
+    const before = await prisma.pycnometer.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Picnometro no encontrado" });
 
-    const updated = await prisma.pycnometer.update({ where: { id }, data });
+    const pycData: any = {};
+    if (description !== undefined) pycData.description = description;
+    if (containerType !== undefined) pycData.containerType = containerType;
+    if (nominalCapacityMl !== undefined) {
+      pycData.nominalCapacityMl = nominalCapacityMl === null ? null : Number(nominalCapacityMl);
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (status !== undefined) {
+        await tx.equipment.update({
+          where: { id: before.equipmentId },
+          data: { status },
+        });
+      }
+      return tx.pycnometer.update({
+        where: { id },
+        data: pycData,
+        include: { equipment: true },
+      });
+    });
 
     await registerAudit({
       userId,
@@ -144,20 +194,20 @@ export async function updatePycnometer(req: AuthRequest, res: Response) {
     return res.status(200).json({ message: "Picnometro actualizado", data: updated });
   } catch (err: any) {
     console.error(err);
-
     if (err.code === "P2025") {
       return res.status(404).json({ message: "Picnometro no encontrado" });
     }
-
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 }
 
 // ----------------------------------------------------
 // POST /api/pycnometers/:id/calibrate
-// Evento formal de calibracion -- registra Mf, Ma(ti), ti de una sola vez
-// (procedimiento independiente, reutilizable en todos los ensayos
-// posteriores que usen este picnometro, por eso va separado de update).
+// Registra la calibración geométrica del picnómetro (Mf, Ma(ti), ti).
+// Estos valores los consume particleDensityCalc.ts directamente.
+// También actualiza lastVerificationAt/verificationDueAt (6 meses),
+// que es lo que equipmentGuard.ts verificará en Phase 2.
+// AuditAction.VERIFY (verificación interna NORMATIVE, no certificación).
 // ----------------------------------------------------
 export async function calibratePycnometer(req: AuthRequest, res: Response) {
   try {
@@ -171,8 +221,7 @@ export async function calibratePycnometer(req: AuthRequest, res: Response) {
       return res.status(400).json({ message: "id inválido" });
     }
 
-    const { massEmptyG, massWaterAtCalTempG, calibrationTempC, calibrationCertUrl, calibratedAt, reason } =
-      req.body;
+    const { massEmptyG, massWaterAtCalTempG, calibrationTempC, calibratedAt, reason } = req.body;
 
     if (!Number.isFinite(Number(massEmptyG))) {
       return res.status(400).json({ message: "massEmptyG (Mf) es obligatorio y debe ser numérico" });
@@ -186,10 +235,14 @@ export async function calibratePycnometer(req: AuthRequest, res: Response) {
       return res.status(400).json({ message: "calibrationTempC (ti) es obligatorio y debe ser numérico" });
     }
 
-    const before = await prisma.pycnometer.findUnique({ where: { id } });
+    const before = await prisma.pycnometer.findUnique({
+      where: { id },
+      include: { equipment: true },
+    });
     if (!before) return res.status(404).json({ message: "Picnometro no encontrado" });
 
-    const lastCalibrationAt = calibratedAt ? new Date(calibratedAt) : new Date();
+    const lastVerificationAt = calibratedAt ? new Date(calibratedAt) : new Date();
+    const verificationDueAt = addMonths(lastVerificationAt, 6);
 
     const updated = await prisma.pycnometer.update({
       where: { id },
@@ -197,29 +250,28 @@ export async function calibratePycnometer(req: AuthRequest, res: Response) {
         massEmptyG: Number(massEmptyG),
         massWaterAtCalTempG: Number(massWaterAtCalTempG),
         calibrationTempC: Number(calibrationTempC),
-        lastCalibrationAt,
-        calibrationCertUrl: calibrationCertUrl ?? before.calibrationCertUrl,
+        lastVerificationAt,
+        verificationDueAt,
       },
+      include: { equipment: true },
     });
 
     await registerAudit({
       userId,
-      action: "CALIBRATE",
+      action: "VERIFY",
       entityType: "Pycnometer",
       entityId: updated.id,
       previousValue: before,
       newValue: updated,
-      reason,
+      reason: reason ?? "Calibración geométrica del picnómetro (Mf/Ma(ti)/ti) — verificación interna 6 meses",
     });
 
     return res.status(200).json({ message: "Calibración registrada", data: updated });
   } catch (err: any) {
     console.error(err);
-
     if (err.code === "P2025") {
       return res.status(404).json({ message: "Picnometro no encontrado" });
     }
-
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 }

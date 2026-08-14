@@ -72,7 +72,7 @@ export async function calculateParticleDensityFromDb(
 ): Promise<ParticleDensityCalcResult> {
   const pd = await prisma.particleDensity.findUnique({
     where: { id: particleDensityId },
-    include: { pycnometer: true },
+    include: { pycnometer: { include: { equipment: true } } },
   });
 
   if (!pd) {
@@ -99,7 +99,7 @@ export async function calculateParticleDensityFromDb(
       maAtTestTempG: null,
       waterDensityAtTestG: null,
       particleDensityGcm3: null,
-      calcNote: `El picnometro ${pyc.code} todavia no tiene calibracion registrada (Mf/Ma(ti)/ti).`,
+      calcNote: `El picnometro ${pyc.equipment.code} todavia no tiene calibracion registrada (Mf/Ma(ti)/ti).`,
     };
   }
 

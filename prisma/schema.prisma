@@ -51,8 +51,36 @@ enum DocumentStatus {
   UNDER_REVIEW
 }
 
-// Catálogo de moldes
-enum MoldStatus {
+// ─────────────────────────────────────
+//   EQUIPMENT / CALIBRACION / VERIFICACION (ISO 17025)
+// ─────────────────────────────────────
+
+// Categoria del equipo: determina que tipo de trazabilidad aplica.
+// NORMATIVE: verificacion interna periodica, sin calibracion externa
+//   (Mold, Pycnometer, SandCone).
+// PRECISION: verificacion interna + calibracion externa acreditada
+//   (balanza, horno de secado).
+// REFERENCE_STANDARD: solo calibracion externa, ancla de trazabilidad
+//   (pesas patron, termometro patron).
+enum EquipmentCategory {
+  NORMATIVE
+  PRECISION
+  REFERENCE_STANDARD
+}
+
+// Tipo de equipo fisico -- un valor por instrumento real.
+// No agregar nuevos tipos sin confirmar periodicidad con Felipe.
+enum EquipmentType {
+  MOLD
+  PYCNOMETER
+  SAND_CONE
+  SCALE
+  OVEN
+  REFERENCE_WEIGHT
+  REFERENCE_THERMOMETER
+}
+
+enum EquipmentStatus {
   ACTIVE
   OUT_OF_SERVICE
 }
@@ -87,23 +115,12 @@ enum PycnometerContainerType {
   BOTTLE
 }
 
-enum PycnometerStatus {
-  ACTIVE
-  OUT_OF_SERVICE
-}
-
 // Determinacion de Humedad (MC Vol.8 §8.102.2, jun-2022 -- adaptacion de
 // NCh1515-79)
 enum MoistureContentStatus {
   DRAFT
   DONE
   NEEDS_REVIEW
-}
-
-// Cono de Arena (MC Vol.8 §8.102.9, adaptacion de NCh1516-79)
-enum SandConeStatus {
-  ACTIVE
-  OUT_OF_SERVICE
 }
 
 // Dos equipos segun rango de particulas: convencional (6", <=50mm) vs
@@ -375,17 +392,21 @@ model Alert {
 //
 
 model Attachment {
-  id         Int      @id @default(autoincrement())
-  url        String
-  type       String // photo, video, pdf, etc.
-  sampleId   Int?
-  testId     Int?
-  documentId Int?
-  uploadedAt DateTime @default(now())
+  id          Int      @id @default(autoincrement())
+  url         String
+  type        String // photo, video, pdf, etc.
+  sampleId    Int?
+  testId      Int?
+  documentId  Int?
+  // Certificados de calibracion externa (PRECISION / REFERENCE_STANDARD).
+  // Mismo patron de FKs opcionales: un registro tiene solo uno poblado.
+  equipmentId Int?
+  uploadedAt  DateTime @default(now())
 
-  sample   Sample?   @relation(fields: [sampleId], references: [id], onDelete: Cascade)
-  test     Test?     @relation(fields: [testId], references: [id], onDelete: Cascade)
-  document Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sample    Sample?    @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  test      Test?      @relation(fields: [testId], references: [id], onDelete: Cascade)
+  document  Document?  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  equipment Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
 }
 
 //
@@ -400,6 +421,7 @@ enum AuditAction {
   DELETE
   APPROVE
   CALIBRATE
+  VERIFY     // verificacion interna periodica (distinta de CALIBRATE que es certificacion externa)
   ROLE_CHANGE
   LOGIN
   OTHER
@@ -559,28 +581,103 @@ model GranulometrySieve {
 
 //
 // ─────────────────────────────────────
+//   EQUIPMENT (ISO 17025) — catálogo padre de todos los instrumentos
+// ─────────────────────────────────────
+//
+// Tabla padre unica para Mold, Pycnometer y SandCone (NORMATIVE) y
+// para equipos de medicion (PRECISION: balanza, horno) y patrones
+// (REFERENCE_STANDARD: pesas patron, termometro patron).
+//
+// Las tablas de detalle (Mold, Pycnometer, SandCone) conservan sus
+// columnas especificas de calibracion/verificacion tipadas porque cada
+// instrumento tiene un procedimiento distinto que NO se puede unificar
+// en JSON generico sin perder trazabilidad normativa.
+
+model Equipment {
+  id          Int               @id @default(autoincrement())
+  code        String            @unique // rotulacion ISO 17025, unico en TODO el catalogo
+  type        EquipmentType
+  category    EquipmentCategory
+  description String?
+  status      EquipmentStatus   @default(ACTIVE)
+
+  // Calibracion externa acreditada -- SOLO PRECISION y REFERENCE_STANDARD.
+  // Para NORMATIVE estos campos quedan null (sin calibracion externa).
+  lastCalibrationAt DateTime?
+  calibrationDueAt  DateTime?
+  calibrationBody   String? // nombre del organismo metrologico acreditado
+
+  // Verificacion interna -- aplica a PRECISION (verificado contra patron).
+  // NORMATIVE tiene sus campos de verificacion en la tabla de detalle
+  // (Mold.verificationDueAt, Pycnometer.verificationDueAt,
+  // SandCone.depositVerificationDueAt / sandDensityVerificationDueAt).
+  lastVerificationAt DateTime?
+  verificationDueAt  DateTime?
+
+  // Relaciones a tablas de detalle (1:1, opcionales porque un Equipment
+  // puede ser PRECISION/REFERENCE_STANDARD y no tener tabla de detalle).
+  mold       Mold?
+  pycnometer Pycnometer?
+  sandCone   SandCone?
+
+  usages      EquipmentUsage[]
+  attachments Attachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([category])
+  @@index([status])
+}
+
+// Tabla puente polimórfica: registra qué equipos se usaron en cada
+// registro de ensayo. El par (entityType, entityId) apunta al ID de
+// la tabla del ensayo correspondiente (Granulometry, Proctor, etc.).
+model EquipmentUsage {
+  id          Int       @id @default(autoincrement())
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+
+  entityType String // "GRANULOMETRY" | "PROCTOR" | "CBR" | "ATTERBERG" |
+                     // "PARTICLE_DENSITY" | "MOISTURE_CONTENT" |
+                     // "SAND_CONE_TEST" | "GRAVEL_DENSITY"
+  entityId   Int
+
+  createdAt DateTime @default(now())
+
+  @@index([equipmentId])
+  @@index([entityType, entityId])
+}
+
+//
+// ─────────────────────────────────────
 //   PROCTOR - CATÁLOGO DE MOLDES + ENSAYO + PUNTOS
 // ─────────────────────────────────────
 //
 
 model Mold {
-  id          Int        @id @default(autoincrement())
-  code        String     @unique // ej: "MOLD-04", "PROCTOR-6IN-02"
+  id          Int       @id @default(autoincrement())
+  // Vinculo obligatorio al catalogo de equipos (1:1).
+  // code/status/descripcion del equipo viven en Equipment.
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+
   description String?
-  volumeCm3   Float // volumen nominal (cm³)
-  tareMassG   Float? // masa molde (g)
-  collarMassG Float? // masa collar (g) si aplica
-  // Altura de la probeta (mm). Opcional -- no aplica a moldes usados solo
-  // para Proctor, pero es obligatoria en la práctica para calcular
-  // swellPercent en CBR (NCh1852.Of81).
+  volumeCm3   Float   // volumen nominal (cm³)
+  tareMassG   Float?  // masa molde (g)
+  collarMassG Float?  // masa collar (g) si aplica
+  // Altura de la probeta (mm). Obligatoria en CBR para swellPercent
+  // (NCh1852.Of81), opcional para Proctor donde no se mide hinchamiento.
   heightMm    Float?
-  status      MoldStatus @default(ACTIVE)
 
-  // Metrología / trazabilidad
-  lastCalibrationAt  DateTime?
-  calibrationCertUrl String?
+  // Verificacion interna -- periodicidad 3 meses (confirmado por Felipe).
+  // Registrada via POST /api/molds/:id/verify (AuditAction.VERIFY).
+  // El guard de ensayo (equipmentGuard.ts) bloquea si verificationDueAt
+  // < hoy o es null.
+  lastVerificationAt DateTime?
+  verificationDueAt  DateTime?
 
-  // Relaciones
   proctorPoints ProctorPoint[]
   cbrPoints     CbrPoint[]
 
@@ -769,25 +866,27 @@ model CbrPoint {
 //
 
 model Pycnometer {
-  id          Int     @id @default(autoincrement())
-  code        String  @unique // ej: "PICN-01"
-  description String?
+  id          Int       @id @default(autoincrement())
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
 
+  description       String?
   containerType     PycnometerContainerType?
   nominalCapacityMl Float?
 
-  // Calibracion (procedimiento independiente, reutilizable entre ensayos
-  // -- se hace una sola vez por picnometro, ver POST /:id/calibrate).
-  // Mf
+  // Calibracion geometrica (procedimiento independiente, reutilizable
+  // entre ensayos -- se registra una sola vez, ver POST /:id/calibrate).
+  // Simbolos identicos a NCh1532.Of80 para auditar linea a linea.
+  // Mf: masa del picnometro vacio y seco
   massEmptyG          Float?
-  // Ma(ti)
+  // Ma(ti): masa picnometro + agua a temperatura de calibracion
   massWaterAtCalTempG Float?
-  // ti
+  // ti: temperatura de calibracion
   calibrationTempC    Float?
 
-  status             PycnometerStatus @default(ACTIVE)
-  lastCalibrationAt  DateTime?
-  calibrationCertUrl String?
+  // Verificacion interna -- periodicidad 6 meses (confirmado por Felipe).
+  lastVerificationAt DateTime?
+  verificationDueAt  DateTime?
 
   particleDensities ParticleDensity[]
 
@@ -901,11 +1000,11 @@ model MoistureContent {
 //
 
 model SandCone {
-  id          Int     @id @default(autoincrement())
-  code        String  @unique // ej: "CONO-01", "MACROCONO-01"
-  description String?
+  id          Int       @id @default(autoincrement())
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
 
-  status SandConeStatus @default(ACTIVE)
+  description String?
 
   // Tipo de aparato: cono convencional (6", <=50mm particulas) o
   // macrocono (12", 50-150mm particulas). Obligatorio, sin default --
@@ -928,6 +1027,8 @@ model SandCone {
   depositWaterTempC   Float? // temperatura de esa calibracion
   depositVolumeCm3    Float? // Vm = mw / ρw(tempC), redondeado a 1 cm3
   depositCalibratedAt DateTime?
+  // Verificacion interna deposito/cono -- periodicidad 6 meses (Felipe).
+  depositVerificationDueAt DateTime?
 
   // ── Calibracion 2: densidad aparente de la arena de ensayo (ρA) ──
   // 5 determinaciones completas, se promedian TODAS (no se descartan ni
@@ -939,6 +1040,9 @@ model SandCone {
   sandDensityVariationPercent Float? // variacion entre las 5 (debe ser <= 1.5%)
   sandDensityGcm3             Float? // ρA final = promedio de las 5, 2 decimales
   sandDensityCalibratedAt     DateTime?
+  // Verificacion interna arena -- periodicidad 3 meses (confirmado por
+  // Felipe). Bloqueante via equipmentGuard si es null o < hoy.
+  sandDensityVerificationDueAt DateTime?
 
   // ── Calibracion 3: masa de arena que llena el cono/embudo (mC) ──
   // Se repite 3 veces (no una sola vez). Criterio de aceptacion:
