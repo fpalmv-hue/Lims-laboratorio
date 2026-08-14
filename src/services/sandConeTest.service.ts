@@ -18,6 +18,7 @@ import prisma from "../prismaClient";
 import { calculateSandConeTestFromDb } from "../utils/sandConeCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -63,6 +64,7 @@ export async function createSandConeTestService(params: {
     mtfG: number;
     mhG: number;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -96,25 +98,43 @@ export async function createSandConeTestService(params: {
     return err(400, "El MoistureContent indicado no pertenece a esta muestra.");
   }
 
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
+
   const { methodCode, minExcavationVolumeCm3, mtiG, mtfG, mhG, notes } = params.body ?? ({} as any);
 
   if (!Number.isFinite(Number(mtiG))) return err(400, "mtiG es obligatorio y debe ser numérico.");
   if (!Number.isFinite(Number(mtfG))) return err(400, "mtfG es obligatorio y debe ser numérico.");
   if (!Number.isFinite(Number(mhG))) return err(400, "mhG es obligatorio y debe ser numérico.");
 
-  const created = await prisma.sandConeTest.create({
-    data: {
-      sampleId,
-      sandConeId,
-      moistureContentId,
-      methodCode: methodCode ?? "MC Vol.8 §8.102.9",
-      minExcavationVolumeCm3: minExcavationVolumeCm3 ?? null,
-      mtiG: Number(mtiG),
-      mtfG: Number(mtfG),
-      mhG: Number(mhG),
-      notes: notes ?? null,
-      status: "DRAFT",
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const sct = await tx.sandConeTest.create({
+      data: {
+        sampleId,
+        sandConeId,
+        moistureContentId,
+        methodCode: methodCode ?? "MC Vol.8 §8.102.9",
+        minExcavationVolumeCm3: minExcavationVolumeCm3 ?? null,
+        mtiG: Number(mtiG),
+        mtfG: Number(mtfG),
+        mhG: Number(mhG),
+        notes: notes ?? null,
+        status: "DRAFT",
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "SAND_CONE_TEST",
+          entityId: sct.id,
+        })),
+      });
+    }
+    return sct;
   });
 
   await registerAudit({
@@ -123,7 +143,7 @@ export async function createSandConeTestService(params: {
     entityType: "SandConeTest",
     entityId: created.id,
     previousValue: null,
-    newValue: created,
+    newValue: { ...created, equipmentIds },
   });
 
   const updated = await runCalcAndSave(created.id);
@@ -140,11 +160,22 @@ export async function getSandConeTestByIdService(idRaw: unknown): Promise<Servic
 
   const test = await prisma.sandConeTest.findUnique({
     where: { id },
-    include: { sandCone: true, moistureContent: true },
+    include: {
+      sandCone: { include: { equipment: true } },
+      moistureContent: true,
+    },
   });
 
   if (!test) return err(404, "Cono de Arena (ensayo) no encontrado.");
-  return { data: test };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "SAND_CONE_TEST", entityId: id },
+    include: {
+      equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+    },
+  });
+
+  return { data: { ...test, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------
