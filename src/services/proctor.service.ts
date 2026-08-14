@@ -20,6 +20,7 @@ import prisma from "../prismaClient";
 import { calculateProctorFromDb } from "../utils/proctorCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -46,6 +47,7 @@ export async function createProctorService(params: {
     layers?: number | null;
     blowsPerLayer?: number | null;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -55,36 +57,56 @@ export async function createProctorService(params: {
   const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
   if (!sample) return err(404, "Muestra no encontrada.");
 
-  // CRITICO: Proctor es un ensayo de mecanica de suelos. No debe crearse
-  // sobre una muestra de otra area del laboratorio (hormigon y aridos /
-  // interior mina). Confirmado con el usuario 02-ago-2026.
   if (sample.area !== "SOIL_MECHANICS") {
     return err(400, `Proctor es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`);
   }
 
+  // Guard ISO 17025: moldes declarados deben estar vigentes.
+  // ATENCION: en produccion (14-ago-2026) los moldes reales PROCTOR-STD-01
+  // y PROCTOR-STD-02 tienen verificationDueAt=null (sin verificacion
+  // registrada) y seran bloqueados por este guard hasta que el tecnico
+  // registre una verificacion real via POST /api/molds/:id/verify.
+  // Esto es el comportamiento correcto, no un bug.
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
+
   const { methodCode, methodName, layers, blowsPerLayer, notes } = params.body ?? {};
 
-  const proctor = await prisma.proctor.create({
-    data: {
-      sampleId,
-      methodCode: methodCode ?? null,
-      methodName: methodName ?? null,
-      layers: layers ?? null,
-      blowsPerLayer: blowsPerLayer ?? null,
-      notes: notes ?? null,
-      status: "DRAFT",
-      curveFit: "PARABOLA",
-    },
+  const proctor = await prisma.$transaction(async (tx) => {
+    const p = await tx.proctor.create({
+      data: {
+        sampleId,
+        methodCode: methodCode ?? null,
+        methodName: methodName ?? null,
+        layers: layers ?? null,
+        blowsPerLayer: blowsPerLayer ?? null,
+        notes: notes ?? null,
+        status: "DRAFT",
+        curveFit: "PARABOLA",
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "PROCTOR",
+          entityId: p.id,
+        })),
+      });
+    }
+    return p;
   });
 
-  // Trazabilidad ISO 17025: registrar la creación del Proctor.
   await registerAudit({
     userId: params.userId,
     action: "CREATE",
     entityType: "Proctor",
     entityId: proctor.id,
     previousValue: null,
-    newValue: proctor,
+    newValue: { ...proctor, equipmentIds },
   });
 
   return { data: proctor };
@@ -100,12 +122,20 @@ export async function getProctorByIdService(idRaw: unknown): Promise<ServiceResu
   const proctor = await prisma.proctor.findUnique({
     where: { id },
     include: {
-      points: { orderBy: [{ order: "asc" }, { id: "asc" }], include: { mold: true } },
+      points: { orderBy: [{ order: "asc" }, { id: "asc" }], include: { mold: { include: { equipment: true } } } },
     },
   });
 
   if (!proctor) return err(404, "Proctor no encontrado.");
-  return { data: proctor };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "PROCTOR", entityId: id },
+    include: {
+      equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+    },
+  });
+
+  return { data: { ...proctor, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------

@@ -12,6 +12,7 @@ import prisma from "../prismaClient";
 import { calculateCbrFromDb } from "../utils/cbrCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T };
@@ -36,6 +37,7 @@ export async function createCbrService(params: {
     proctorId?: number | string;
     methodCode?: string | null;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -45,8 +47,6 @@ export async function createCbrService(params: {
   const sample = await prisma.sample.findUnique({ where: { id: sampleId } });
   if (!sample) return err(404, "Muestra no encontrada.");
 
-  // CRITICO: CBR es un ensayo de mecanica de suelos. No debe crearse
-  // sobre una muestra de otra area del laboratorio.
   if (sample.area !== "SOIL_MECHANICS") {
     return err(
       400,
@@ -63,16 +63,36 @@ export async function createCbrService(params: {
     return err(400, "El Proctor indicado no pertenece a esta muestra.");
   }
 
+  // Guard ISO 17025: mismo aviso que Proctor -- moldes reales bloquearan
+  // hasta que se registre una verificacion real via POST /api/molds/:id/verify.
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
+
   const { methodCode, notes } = params.body ?? {};
 
-  const cbr = await prisma.cbr.create({
-    data: {
-      sampleId,
-      proctorId,
-      methodCode: methodCode ?? "NCh1852.Of81",
-      notes: notes ?? null,
-      status: "DRAFT",
-    },
+  const cbr = await prisma.$transaction(async (tx) => {
+    const c = await tx.cbr.create({
+      data: {
+        sampleId,
+        proctorId,
+        methodCode: methodCode ?? "NCh1852.Of81",
+        notes: notes ?? null,
+        status: "DRAFT",
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "CBR",
+          entityId: c.id,
+        })),
+      });
+    }
+    return c;
   });
 
   await registerAudit({
@@ -81,7 +101,7 @@ export async function createCbrService(params: {
     entityType: "Cbr",
     entityId: cbr.id,
     previousValue: null,
-    newValue: cbr,
+    newValue: { ...cbr, equipmentIds },
   });
 
   return { data: cbr };
@@ -98,12 +118,20 @@ export async function getCbrByIdService(idRaw: unknown): Promise<ServiceResult<a
     where: { id },
     include: {
       proctor: true,
-      points: { orderBy: [{ order: "asc" }, { id: "asc" }], include: { mold: true } },
+      points: { orderBy: [{ order: "asc" }, { id: "asc" }], include: { mold: { include: { equipment: true } } } },
     },
   });
 
   if (!cbr) return err(404, "CBR no encontrado.");
-  return { data: cbr };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "CBR", entityId: id },
+    include: {
+      equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+    },
+  });
+
+  return { data: { ...cbr, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------
