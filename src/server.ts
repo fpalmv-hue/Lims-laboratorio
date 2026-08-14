@@ -21,6 +21,7 @@ import sandConeRoutes from "./routes/sandCone.routes";
 import sandConeTestRoutes from "./routes/sandConeTest.routes";
 import gravelDensityRoutes from "./routes/gravelDensity.routes";
 import documentRoutes from "./routes/document.routes";
+import equipmentRoutes from "./routes/equipment.routes";
 import { CORS_ORIGINS } from "./config/env";
 
 const app = express();
@@ -85,6 +86,7 @@ app.use("/api/sand-cones", sandConeRoutes);
 app.use("/api/sand-cone-tests", sandConeTestRoutes);
 app.use("/api/gravel-densities", gravelDensityRoutes);
 app.use("/api/documents", documentRoutes);
+app.use("/api/equipment", equipmentRoutes);
 
 // Inicio de servidor
 app.listen(PORT, () => {
