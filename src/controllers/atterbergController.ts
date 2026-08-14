@@ -3,6 +3,7 @@ import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 function toNumberOrNull(v: any): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -60,18 +61,28 @@ export async function createAtterberg(req: AuthRequest, res: Response) {
 
     const ip = calcIP(ll, lp);
 
-    const created = await prisma.atterberg.create({
-      data: {
-        sampleId,
-        method,
-        liquidLimit: ll,
-        plasticLimit: lp,
-        plasticityIdx: ip,
-        notes,
-      },
+    const equipmentIds: number[] = Array.isArray(req.body.equipmentIds)
+      ? req.body.equipmentIds.map(Number)
+      : [];
+    const guardMsg = await assertEquipmentUsable(equipmentIds);
+    if (guardMsg) return res.status(400).json({ message: guardMsg });
+
+    const created = await prisma.$transaction(async (tx) => {
+      const att = await tx.atterberg.create({
+        data: { sampleId, method, liquidLimit: ll, plasticLimit: lp, plasticityIdx: ip, notes },
+      });
+      if (equipmentIds.length > 0) {
+        await tx.equipmentUsage.createMany({
+          data: equipmentIds.map((eqId) => ({
+            equipmentId: eqId,
+            entityType: "ATTERBERG",
+            entityId: att.id,
+          })),
+        });
+      }
+      return att;
     });
 
-    // Trazabilidad ISO 17025: registrar la creación del Atterberg.
     if (req.user) {
       await registerAudit({
         userId: req.user.id,
@@ -79,7 +90,7 @@ export async function createAtterberg(req: AuthRequest, res: Response) {
         entityType: "Atterberg",
         entityId: created.id,
         previousValue: null,
-        newValue: created,
+        newValue: { ...created, equipmentIds },
       });
     }
 
@@ -149,38 +160,73 @@ export async function upsertAtterberg(req: AuthRequest, res: Response) {
 
     const ip = calcIP(finalLL, finalLP);
 
-    const saved = await prisma.atterberg.upsert({
-      where: { sampleId },
-      create: {
-        sampleId,
-        method: finalMethod,
-        liquidLimit: finalLL,
-        plasticLimit: finalLP,
-        plasticityIdx: ip,
-        notes: finalNotes,
-      },
-      update: {
-        method: finalMethod,
-        liquidLimit: finalLL,
-        plasticLimit: finalLP,
-        plasticityIdx: ip,
-        notes: finalNotes,
-        ...(current ? approvalResetIfNeeded(current.isApproved) : {}),
-      },
-    });
+    let saved;
+    if (!current) {
+      // Creación: guard + EquipmentUsage atómico.
+      const equipmentIds: number[] = Array.isArray(req.body.equipmentIds)
+        ? req.body.equipmentIds.map(Number)
+        : [];
+      const guardMsg = await assertEquipmentUsable(equipmentIds);
+      if (guardMsg) return res.status(400).json({ message: guardMsg });
 
-    // Trazabilidad ISO 17025: registrar CREATE si no existía antes
-    // (current === null), o UPDATE con el estado previo si ya existía.
-    if (req.user) {
-      await registerAudit({
-        userId: req.user.id,
-        action: current ? "UPDATE" : "CREATE",
-        entityType: "Atterberg",
-        entityId: saved.id,
-        previousValue: current,
-        newValue: saved,
-        reason: req.body.reason,
+      saved = await prisma.$transaction(async (tx) => {
+        const att = await tx.atterberg.create({
+          data: {
+            sampleId,
+            method: finalMethod,
+            liquidLimit: finalLL,
+            plasticLimit: finalLP,
+            plasticityIdx: ip,
+            notes: finalNotes,
+          },
+        });
+        if (equipmentIds.length > 0) {
+          await tx.equipmentUsage.createMany({
+            data: equipmentIds.map((eqId) => ({
+              equipmentId: eqId,
+              entityType: "ATTERBERG",
+              entityId: att.id,
+            })),
+          });
+        }
+        return att;
       });
+
+      if (req.user) {
+        await registerAudit({
+          userId: req.user.id,
+          action: "CREATE",
+          entityType: "Atterberg",
+          entityId: saved.id,
+          previousValue: null,
+          newValue: { ...saved, equipmentIds: req.body.equipmentIds ?? [] },
+        });
+      }
+    } else {
+      // Edición: no re-valida equipmentIds (declaración de equipos solo en creación).
+      saved = await prisma.atterberg.update({
+        where: { sampleId },
+        data: {
+          method: finalMethod,
+          liquidLimit: finalLL,
+          plasticLimit: finalLP,
+          plasticityIdx: ip,
+          notes: finalNotes,
+          ...approvalResetIfNeeded(current.isApproved),
+        },
+      });
+
+      if (req.user) {
+        await registerAudit({
+          userId: req.user.id,
+          action: "UPDATE",
+          entityType: "Atterberg",
+          entityId: saved.id,
+          previousValue: current,
+          newValue: saved,
+          reason: req.body.reason,
+        });
+      }
     }
 
     return res.status(200).json({ message: "Atterberg guardado", data: saved });
@@ -203,7 +249,14 @@ export async function getAtterbergBySample(req: AuthRequest, res: Response) {
     const atterberg = await prisma.atterberg.findUnique({ where: { sampleId } });
     if (!atterberg) return res.status(404).json({ message: "Atterberg no encontrado" });
 
-    return res.status(200).json({ message: "OK", data: atterberg });
+    const equiposUsados = await prisma.equipmentUsage.findMany({
+      where: { entityType: "ATTERBERG", entityId: atterberg.id },
+      include: {
+        equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+      },
+    });
+
+    return res.status(200).json({ message: "OK", data: { ...atterberg, equiposUsados } });
   } catch (err: any) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });
