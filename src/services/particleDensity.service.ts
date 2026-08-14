@@ -20,6 +20,7 @@ import prisma from "../prismaClient";
 import { calculateParticleDensityFromDb } from "../utils/particleDensityCalc";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 
 type ServiceError = { error: { status: number; message: string } };
 type ServiceOk<T> = { data: T; warning?: string };
@@ -83,6 +84,7 @@ export async function createParticleDensityService(params: {
     mmG: number;
     testTempC: number;
     notes?: string | null;
+    equipmentIds?: number[];
   };
   userId: number;
 }): Promise<ServiceResult<any>> {
@@ -107,25 +109,43 @@ export async function createParticleDensityService(params: {
   const pycnometer = await prisma.pycnometer.findUnique({ where: { id: pycnometerId } });
   if (!pycnometer) return err(404, "Picnometro no encontrado.");
 
+  const equipmentIds: number[] = Array.isArray(params.body?.equipmentIds)
+    ? params.body.equipmentIds.map(Number)
+    : [];
+  const guardMsg = await assertEquipmentUsable(equipmentIds);
+  if (guardMsg) return err(400, guardMsg);
+
   const { methodCode, containerType, balancePrecisionG, msG, mmG, testTempC, notes } = params.body ?? ({} as any);
 
   if (!Number.isFinite(Number(msG))) return err(400, "msG es obligatorio y debe ser numérico.");
   if (!Number.isFinite(Number(mmG))) return err(400, "mmG es obligatorio y debe ser numérico.");
   if (!Number.isFinite(Number(testTempC))) return err(400, "testTempC es obligatorio y debe ser numérico.");
 
-  const created = await prisma.particleDensity.create({
-    data: {
-      sampleId,
-      pycnometerId,
-      methodCode: methodCode ?? "NCh1532.Of80",
-      containerType: (containerType ?? null) as any,
-      balancePrecisionG: balancePrecisionG ?? null,
-      msG: Number(msG),
-      mmG: Number(mmG),
-      testTempC: Number(testTempC),
-      notes: notes ?? null,
-      status: "DRAFT",
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const pd = await tx.particleDensity.create({
+      data: {
+        sampleId,
+        pycnometerId,
+        methodCode: methodCode ?? "NCh1532.Of80",
+        containerType: (containerType ?? null) as any,
+        balancePrecisionG: balancePrecisionG ?? null,
+        msG: Number(msG),
+        mmG: Number(mmG),
+        testTempC: Number(testTempC),
+        notes: notes ?? null,
+        status: "DRAFT",
+      },
+    });
+    if (equipmentIds.length > 0) {
+      await tx.equipmentUsage.createMany({
+        data: equipmentIds.map((eqId) => ({
+          equipmentId: eqId,
+          entityType: "PARTICLE_DENSITY",
+          entityId: pd.id,
+        })),
+      });
+    }
+    return pd;
   });
 
   await registerAudit({
@@ -134,11 +154,10 @@ export async function createParticleDensityService(params: {
     entityType: "ParticleDensity",
     entityId: created.id,
     previousValue: null,
-    newValue: created,
+    newValue: { ...created, equipmentIds },
   });
 
   const updated = await runCalcAndSave(created.id);
-
   const warning = balancePrecisionWarning(containerType ?? null, balancePrecisionG ?? null);
 
   return warning ? { data: updated, warning } : { data: updated };
@@ -153,11 +172,19 @@ export async function getParticleDensityByIdService(idRaw: unknown): Promise<Ser
 
   const pd = await prisma.particleDensity.findUnique({
     where: { id },
-    include: { pycnometer: true },
+    include: { pycnometer: { include: { equipment: true } } },
   });
 
   if (!pd) return err(404, "Densidad de Particulas Solidas no encontrada.");
-  return { data: pd };
+
+  const equiposUsados = await prisma.equipmentUsage.findMany({
+    where: { entityType: "PARTICLE_DENSITY", entityId: id },
+    include: {
+      equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+    },
+  });
+
+  return { data: { ...pd, equiposUsados } };
 }
 
 // ---------------------------------------------------------------------
