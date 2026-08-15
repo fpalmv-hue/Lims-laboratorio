@@ -20,7 +20,7 @@ import { registerAudit } from "../utils/auditLog";
 import { computeVigente } from "../utils/equipmentGuard";
 
 // Coherencia entre category y type (conforme al enum EquipmentType del schema).
-const NORMATIVE_TYPES = ["MOLD", "PYCNOMETER", "SAND_CONE"] as const;
+const NORMATIVE_TYPES = ["MOLD", "PYCNOMETER", "SAND_CONE", "SIEVE"] as const;
 const PRECISION_TYPES = ["SCALE", "OVEN"] as const;
 const REFERENCE_TYPES = ["REFERENCE_WEIGHT", "REFERENCE_THERMOMETER"] as const;
 
@@ -64,6 +64,7 @@ const VIGENTE_INCLUDE = {
       sandDensityVerificationDueAt: true,
     },
   },
+  sieve: { select: { verificationDueAt: true, astmDesignation: true } },
 } as const;
 
 function addVigente<T extends Parameters<typeof computeVigente>[0]>(eq: T) {
@@ -92,6 +93,8 @@ function nextDueDateOf(
     candidates.push(eq.mold?.verificationDueAt);
   } else if (eq.type === "PYCNOMETER") {
     candidates.push(eq.pycnometer?.verificationDueAt);
+  } else if (eq.type === "SIEVE") {
+    candidates.push(eq.sieve?.verificationDueAt);
   } else if (eq.type === "SAND_CONE") {
     candidates.push(
       eq.sandCone?.depositVerificationDueAt,

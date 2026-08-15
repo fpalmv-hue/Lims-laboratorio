@@ -4,6 +4,7 @@ import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
 import { assertReasonIfApproved, approvalResetIfNeeded } from "../utils/approvalGuard";
+import { assertEquipmentUsable } from "../utils/equipmentGuard";
 import {
   calculateGranulometry,
   GranulometrySieveInput,
@@ -95,7 +96,7 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
       return res.status(401).json({ message: "Usuario no autenticado" });
     }
 
-    const { sampleId, method, notes, sieves } = req.body as {
+    const { sampleId, method, notes, sieves, equipmentIds } = req.body as {
       sampleId: number;
       method?: string | null;
       notes?: string | null;
@@ -107,6 +108,7 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
         retainedMass: number;
         fraction?: string;
       }>;
+      equipmentIds?: number[];
     };
 
     if (!sampleId || !Number.isFinite(Number(sampleId))) {
@@ -131,6 +133,11 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
         message: `Granulometry (MOP 8.102.1) es un ensayo de mecanica de suelos (SOIL_MECHANICS). La muestra ${sample.code} pertenece al area ${sample.area}.`,
       });
     }
+
+    // Guard ISO 17025: tamices declarados deben estar vigentes.
+    const eqIds: number[] = Array.isArray(equipmentIds) ? equipmentIds.map(Number) : [];
+    const guardMsg = await assertEquipmentUsable(eqIds);
+    if (guardMsg) return res.status(400).json({ message: guardMsg });
 
     const { balance, error: balanceError } = parseMassBalanceFromBody(req.body);
     if (balanceError) return res.status(400).json({ message: balanceError });
@@ -209,6 +216,16 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
         }),
       });
 
+      if (eqIds.length > 0) {
+        await tx.equipmentUsage.createMany({
+          data: eqIds.map((eqId) => ({
+            equipmentId: eqId,
+            entityType: "GRANULOMETRY",
+            entityId: g.id,
+          })),
+        });
+      }
+
       return tx.granulometry.findUnique({
         where: { id: g.id },
         include: { sieves: { orderBy: { order: "asc" } } },
@@ -225,7 +242,7 @@ export const createGranulometry = async (req: AuthRequest, res: Response) => {
         entityType: "Granulometry",
         entityId: created.id,
         previousValue: null,
-        newValue: created,
+        newValue: { ...created, equipmentIds: eqIds },
       });
     }
 
@@ -267,12 +284,19 @@ export const getGranulometryById = async (req: AuthRequest, res: Response) => {
 
     if (!row) return res.status(404).json({ message: "Granulometría no encontrada." });
 
+    const equiposUsados = await prisma.equipmentUsage.findMany({
+      where: { entityType: "GRANULOMETRY", entityId: id },
+      include: {
+        equipment: { select: { id: true, code: true, type: true, category: true, status: true } },
+      },
+    });
+
     const qa = evaluateSoilSeriesQa(row.sieves.map((s) => ({ order: s.order, sieveLabel: s.sieveLabel, openingMm: s.openingMm })));
     const curve = buildSoilCurveDataset(
       row.sieves.map((s) => ({ order: s.order, sieveLabel: s.sieveLabel, openingMm: s.openingMm, percentPassing: s.percentPassing }))
     );
 
-    return res.json({ message: "OK", data: row, qa, curve });
+    return res.json({ message: "OK", data: { ...row, equiposUsados }, qa, curve });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Error interno del servidor" });

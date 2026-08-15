@@ -74,6 +74,7 @@ enum EquipmentType {
   MOLD
   PYCNOMETER
   SAND_CONE
+  SIEVE
   SCALE
   OVEN
   REFERENCE_WEIGHT
@@ -619,6 +620,7 @@ model Equipment {
   mold       Mold?
   pycnometer Pycnometer?
   sandCone   SandCone?
+  sieve      Sieve?
 
   usages      EquipmentUsage[]
   attachments Attachment[]
@@ -629,6 +631,29 @@ model Equipment {
   @@index([type])
   @@index([category])
   @@index([status])
+}
+
+// Tamiz individual (instrumento trazable, un registro por tamiz físico).
+// Categoría NORMATIVE, verificación interna 6 meses (confirmado por Felipe).
+// Sin calibración externa acreditada.
+// astmDesignation: nomenclatura normativa (ej: "N°4", "3/4\"", "N°200"),
+// coincide con los sieveLabel ya usados en granulometryCalc.ts para
+// mantener auditabilidad línea a línea contra MOP 8.102.1.
+// openingMm: abertura EXACTA en mm según ASTM E11 / MOP 8.102.1 --
+// nunca un valor redondeado (ej: N°40 = 0.425, NO 0.5; N°200 = 0.075, NO 0.08).
+model Sieve {
+  id          Int       @id @default(autoincrement())
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+
+  astmDesignation String  // ej: "N°4", "3/4\"", "N°40", "N°200"
+  openingMm       Float   // abertura normada exacta en mm
+
+  lastVerificationAt DateTime?
+  verificationDueAt  DateTime?  // periodicidad 6 meses (confirmado Felipe)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // Tabla puente polimórfica: registra qué equipos se usaron en cada

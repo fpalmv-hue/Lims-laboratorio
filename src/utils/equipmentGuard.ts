@@ -38,6 +38,10 @@ type EquipmentWithDetail = {
     depositVerificationDueAt: Date | null;
     sandDensityVerificationDueAt: Date | null;
   } | null;
+  sieve?: {
+    verificationDueAt: Date | null;
+    astmDesignation: string;
+  } | null;
 };
 
 /**
@@ -100,6 +104,16 @@ export function computeVigente(eq: EquipmentWithDetail): { vigente: boolean; mot
     return { vigente: true };
   }
 
+  if (eq.type === "SIEVE") {
+    if (!eq.sieve?.verificationDueAt || eq.sieve.verificationDueAt < now) {
+      return {
+        vigente: false,
+        motivo: `Tamiz ${eq.code} (${eq.sieve?.astmDesignation ?? "?"}): verificación interna vencida o sin registrar (periodicidad 6 meses).`,
+      };
+    }
+    return { vigente: true };
+  }
+
   if (eq.type === "SAND_CONE") {
     if (
       !eq.sandCone?.depositVerificationDueAt ||
@@ -147,6 +161,7 @@ export async function isEquipmentVigente(
           sandDensityVerificationDueAt: true,
         },
       },
+      sieve: { select: { verificationDueAt: true, astmDesignation: true } },
     },
   });
 
