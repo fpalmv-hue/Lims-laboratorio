@@ -4,7 +4,7 @@ import prisma from "../prismaClient";
 import { AuthRequest } from "../middlewares/auth";
 import { registerAudit } from "../utils/auditLog";
 
-const VALID_AREAS = ["SOIL_MECHANICS", "CONCRETE_AGGREGATES", "MINE_INTERIOR"];
+const VALID_AREAS = ["SOIL_MECHANICS", "HORMIGON", "MINE_INTERIOR"];
 
 // -----------------------------------------------------------------------------
 // Crear muestra

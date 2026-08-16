@@ -12,7 +12,7 @@ const router = Router();
 
 router.get("/ping", (req, res) => res.json({ ok: true, route: "gravel-densities" }));
 
-// Crear por muestra (valida area SOIL_MECHANICS o CONCRETE_AGGREGATES)
+// Crear por muestra (valida area SOIL_MECHANICS o HORMIGON)
 router.post("/sample/:sampleId", createGravelDensity);
 
 // Listar por muestra

@@ -23,6 +23,7 @@ import gravelDensityRoutes from "./routes/gravelDensity.routes";
 import documentRoutes from "./routes/document.routes";
 import equipmentRoutes from "./routes/equipment.routes";
 import sievesRoutes from "./routes/sieves.routes";
+import aggregateGranulometryRoutes from "./routes/aggregateGranulometry.routes";
 import { CORS_ORIGINS } from "./config/env";
 
 const app = express();
@@ -89,6 +90,7 @@ app.use("/api/gravel-densities", gravelDensityRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/equipment", equipmentRoutes);
 app.use("/api/sieves", sievesRoutes);
+app.use("/api/aggregate-granulometries", aggregateGranulometryRoutes);
 
 // Inicio de servidor
 app.listen(PORT, () => {

@@ -5,8 +5,9 @@
 // assertReasonIfApproved / approvalResetIfNeeded en cada edicion.
 //
 // PRIMERA EXCEPCION a la regla de "un ensayo, una sola area": el guard
-// acepta SOIL_MECHANICS o CONCRETE_AGGREGATES (confirmado con el usuario
-// 12-ago-2026 -- ver nota en schema.prisma).
+// acepta SOIL_MECHANICS o HORMIGON (confirmado con el usuario
+// 12-ago-2026 -- ver nota en schema.prisma). LabArea.CONCRETE_AGGREGATES
+// fue renombrado a HORMIGON el 15-ago-2026 (Fase 4).
 //
 // A diferencia de los demas ensayos, la tolerancia entre muestras
 // gemelas (10.3.1 de la norma) es bloqueante en el propio create/update:
@@ -35,7 +36,7 @@ function parseId(raw: unknown): number | null {
   return n;
 }
 
-const VALID_AREAS = ["SOIL_MECHANICS", "CONCRETE_AGGREGATES"];
+const VALID_AREAS = ["SOIL_MECHANICS", "HORMIGON"];
 
 type BuildCalcDataResult =
   | { ok: true; data: Record<string, unknown> }
@@ -100,7 +101,7 @@ export async function createGravelDensityService(params: {
   if (!VALID_AREAS.includes(sample.area)) {
     return err(
       400,
-      `Densidad Neta/Real de Gravas (NCh1117.Of2010) es válido para muestras de SOIL_MECHANICS o CONCRETE_AGGREGATES. La muestra ${sample.code} pertenece al area ${sample.area}.`
+      `Densidad Neta/Real de Gravas (NCh1117.Of2010) es válido para muestras de SOIL_MECHANICS o HORMIGON. La muestra ${sample.code} pertenece al area ${sample.area}.`
     );
   }
 
