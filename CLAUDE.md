@@ -118,6 +118,8 @@ Resueltos recientemente (referencia historica, ya no son deuda activa):
 
 Fase futura habilitada pero NO a iniciar de oficio: validacion completa de los motores de calculo (granulometryCalc.ts, proctorCalc.ts, formula IP de Atterberg). Esperar indicacion explicita del usuario, no es evidente que haga falta, es una fase separada.
 
+**NCh163:2024 (Calificacion de Aridos) -- decision fija (16-ago-2026):** verificada contra el PDF oficial (clasificacion natural/procesado/reciclado/recuperado/artificial, Tabla 1 fisica, Tabla 2 quimica, Tablas 5-8 composicion de escorias, RAA, filler), pero **NO implementada**. No es falta de tiempo: el gestor de normativas completo (clasificacion, composicion quimica, reglas de aceptacion/rechazo) es una etapa de producto distinta y futura, condicionada a tener un servidor integrado corriendo en produccion. Prioridad actual: fidelidad normativa del motor de calculo de cada ensayo (ver Fase 4, NCh165), no gates de aceptacion. **No reabrir sin pedido explicito.**
+
 ## Gotchas operativos (leer antes de tocar codigo)
 
 1. ts-node no hace hot-reload. Despues de pegar cualquier archivo nuevo, hay que reiniciar el servidor manualmente (Ctrl+C y npm run dev) antes de probar en runtime. Si no se reinicia, el servidor sigue sirviendo la version vieja sin ningun error visible.
@@ -151,4 +153,5 @@ npx ts-node src/scripts/checkAudit.ts ENTITY_TYPE ENTITY_ID : inspeccionar el tr
 - No dar por buena la ejecucion de un archivo pegado sin la verificacion correspondiente.
 - No mezclar el upgrade de Prisma 7.x con otro trabajo.
 - No iniciar la fase de validacion de motores de calculo sin pedido explicito.
+- No iniciar el gestor de normativas / Calificacion de Aridos (NCh163:2024) sin pedido explicito -- ver decision fija en "Deuda tecnica conocida".
 - No commitear credenciales reales (contrasenas, tokens) a este archivo ni a ningun otro del repo.
