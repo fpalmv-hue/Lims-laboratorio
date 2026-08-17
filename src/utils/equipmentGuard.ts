@@ -42,6 +42,9 @@ type EquipmentWithDetail = {
     verificationDueAt: Date | null;
     astmDesignation: string;
   } | null;
+  losAngelesMachine?: {
+    verificationDueAt: Date | null;
+  } | null;
 };
 
 /**
@@ -114,6 +117,16 @@ export function computeVigente(eq: EquipmentWithDetail): { vigente: boolean; mot
     return { vigente: true };
   }
 
+  if (eq.type === "LOS_ANGELES_MACHINE") {
+    if (!eq.losAngelesMachine?.verificationDueAt || eq.losAngelesMachine.verificationDueAt < now) {
+      return {
+        vigente: false,
+        motivo: `Maquina de Los Angeles ${eq.code}: verificacion interna vencida o sin registrar (periodicidad 6 meses).`,
+      };
+    }
+    return { vigente: true };
+  }
+
   if (eq.type === "SAND_CONE") {
     if (
       !eq.sandCone?.depositVerificationDueAt ||
@@ -162,6 +175,7 @@ export async function isEquipmentVigente(
         },
       },
       sieve: { select: { verificationDueAt: true, astmDesignation: true } },
+      losAngelesMachine: { select: { verificationDueAt: true } },
     },
   });
 

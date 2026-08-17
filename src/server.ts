@@ -24,6 +24,8 @@ import documentRoutes from "./routes/document.routes";
 import equipmentRoutes from "./routes/equipment.routes";
 import sievesRoutes from "./routes/sieves.routes";
 import aggregateGranulometryRoutes from "./routes/aggregateGranulometry.routes";
+import losAngelesMachineRoutes from "./routes/losAngelesMachine.routes";
+import losAngelesAbrasionRoutes from "./routes/losAngelesAbrasion.routes";
 import { CORS_ORIGINS } from "./config/env";
 
 const app = express();
@@ -91,6 +93,8 @@ app.use("/api/documents", documentRoutes);
 app.use("/api/equipment", equipmentRoutes);
 app.use("/api/sieves", sievesRoutes);
 app.use("/api/aggregate-granulometries", aggregateGranulometryRoutes);
+app.use("/api/los-angeles-machines", losAngelesMachineRoutes);
+app.use("/api/los-angeles-abrasions", losAngelesAbrasionRoutes);
 
 // Inicio de servidor
 app.listen(PORT, () => {

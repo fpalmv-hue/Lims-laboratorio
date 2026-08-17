@@ -79,6 +79,7 @@ enum EquipmentType {
   OVEN
   REFERENCE_WEIGHT
   REFERENCE_THERMOMETER
+  LOS_ANGELES_MACHINE
 }
 
 enum EquipmentStatus {
@@ -169,6 +170,16 @@ enum AggregateGranulometryStatus {
   NEEDS_REVIEW
 }
 
+// Desgaste Los Angeles (NCh1369:2010). El grado (1-7) se determina
+// automaticamente desde la granulometria de origen via Anexo A -- no es
+// un campo libre. Grados 1-2-3 no son comparables con 4-5-6-7 (cl. 10,
+// nota) -- ver gradoGrupo en LosAngelesAbrasion.
+enum LosAngelesAbrasionStatus {
+  DRAFT
+  DONE
+  NEEDS_REVIEW
+}
+
 enum ProctorCurveFit {
   PARABOLA
   LINEAR_SEGMENTS
@@ -235,6 +246,7 @@ model User {
   approvedSandConeTests           SandConeTest[]          @relation("SandConeTestApprovedBy")
   approvedGravelDensities         GravelDensity[]         @relation("GravelDensityApprovedBy")
   approvedAggregateGranulometries AggregateGranulometry[] @relation("AggregateGranulometryApprovedBy")
+  approvedLosAngelesAbrasions     LosAngelesAbrasion[]    @relation("LosAngelesAbrasionApprovedBy")
 }
 
 //
@@ -302,6 +314,9 @@ model Sample {
   // exclusivo de area HORMIGON (a diferencia de GravelDensity, no acepta
   // SOIL_MECHANICS -- son normas y series de tamices distintas).
   aggregateGranulometries AggregateGranulometry[]
+
+  // Desgaste Los Angeles (NCh1369:2010): exclusivo de area HORMIGON.
+  losAngelesAbrasions LosAngelesAbrasion[]
 }
 
 //
@@ -642,10 +657,11 @@ model Equipment {
 
   // Relaciones a tablas de detalle (1:1, opcionales porque un Equipment
   // puede ser PRECISION/REFERENCE_STANDARD y no tener tabla de detalle).
-  mold       Mold?
-  pycnometer Pycnometer?
-  sandCone   SandCone?
-  sieve      Sieve?
+  mold              Mold?
+  pycnometer        Pycnometer?
+  sandCone          SandCone?
+  sieve             Sieve?
+  losAngelesMachine LosAngelesMachine?
 
   usages      EquipmentUsage[]
   attachments Attachment[]
@@ -691,6 +707,34 @@ model Sieve {
   updatedAt DateTime @updatedAt
 }
 
+// Maquina de Los Angeles (NCh1369:2010, Fase 5). Categoria NORMATIVE,
+// mismo patron 1:1 via equipmentId que Mold/Pycnometer/SandCone/Sieve
+// (confirmado por Felipe 18-ago-2026, Opcion A -- especializada, en vez
+// de Equipment generico sin tabla de detalle).
+// cylinderDiameterMm/cylinderLengthMm: geometria del cilindro (cl. 5.1.1).
+// rotationSpeedRpm: velocidad de rotacion nominal, informativo.
+// Verificacion interna: periodicidad 6 meses (confirmado Felipe
+// 18-ago-2026 -- la norma solo exige inspeccionar el tope
+// "periodicamente", Anexo B, sin frecuencia numerica fija propia).
+// Las esferas de acero (cl. 5.5) NO son Equipment individual -- son masa
+// patron derivada del grado (Tabla 2), ver LosAngelesAbrasion.
+model LosAngelesMachine {
+  id          Int       @id @default(autoincrement())
+  equipmentId Int       @unique
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+
+  description        String?
+  cylinderDiameterMm Float?
+  cylinderLengthMm   Float?
+  rotationSpeedRpm   Float?
+
+  lastVerificationAt DateTime?
+  verificationDueAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // Tabla puente polimórfica: registra qué equipos se usaron en cada
 // registro de ensayo. El par (entityType, entityId) apunta al ID de
 // la tabla del ensayo correspondiente (Granulometry, Proctor, etc.).
@@ -701,7 +745,8 @@ model EquipmentUsage {
 
   entityType String // "GRANULOMETRY" | "PROCTOR" | "CBR" | "ATTERBERG" |
   // "PARTICLE_DENSITY" | "MOISTURE_CONTENT" |
-  // "SAND_CONE_TEST" | "GRAVEL_DENSITY"
+  // "SAND_CONE_TEST" | "GRAVEL_DENSITY" | "AGGREGATE_GRANULOMETRY" |
+  // "LOS_ANGELES_ABRASION"
   entityId   Int
 
   createdAt DateTime @default(now())
@@ -1350,4 +1395,126 @@ model AggregateGranulometrySieve {
 
   @@unique([aggregateGranulometryId, order])
   @@index([aggregateGranulometryId])
+}
+
+//
+// ─────────────────────────────────────
+//   DESGASTE LOS ANGELES DE ARIDOS
+//   NCh1369:2010 (Fase 5, 18-ago-2026)
+// ─────────────────────────────────────
+//
+// Exclusivo de area HORMIGON. Dos datasets separados por diseño
+// (confirmado con Felipe 18-ago-2026, NO son el mismo dato):
+//   1. LosAngelesAbrasionSieve (11 filas fijas, cl. 7.2): granulometria
+//      de ORIGEN de la muestra (tamaño de origen arbitrario), usada
+//      UNICAMENTE para determinar el grado via Anexo A (suma de %ppr
+//      por grado, elige el mayor).
+//   2. LosAngelesAbrasionFraction (1 a 4 filas segun el grado YA
+//      determinado): masas de la CARGA DE ENSAYO preparada segun
+//      Tabla 1 para ese grado -- esto es lo que realmente entra a la
+//      maquina. Bloqueante: si alguna fraccion (o el total) esta fuera
+//      de tolerancia de Tabla 1, se rechaza con 400 sin persistir nada.
+// Coincide con la practica real de ASTM C131/C535 (base normativa
+// citada por NCh1369): primero se caracteriza el material de origen,
+// despues se prepara una carga estandarizada con las masas exactas de
+// Tabla 1 -- son dos pasos de laboratorio distintos, no el mismo dato.
+//
+// Condiciones de maquina (Tabla 2: esferas y revoluciones) NO son input
+// del operador -- son valores derivados del grado, persistidos solo
+// como referencia del resultado (evita inconsistencia entre lo
+// declarado y lo normativo).
+//
+// Brechas conocidas (documentadas en CLAUDE.md, NO implementadas en
+// esta fase): caso de prospeccion de yacimientos (nota 6.3, eleccion de
+// grado por banda de uso en vez de mayor sumatoria) y alcance de
+// mezclas asfalticas (cl. 1.2, sin area de pavimentos modelada).
+model LosAngelesAbrasion {
+  id       Int    @id @default(autoincrement())
+  sampleId Int
+  sample   Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  methodCode String?                  @default("NCh1369.Of2010")
+  status     LosAngelesAbrasionStatus @default(DRAFT)
+
+  // CALCULATED -- grado 1-7, determinado automaticamente via Anexo A
+  // desde la granulometria de origen (sourceSieves). NUNCA campo libre.
+  gradoEnsayo Int?
+  // "1-2-3" | "4-5-6-7" -- grados no comparables entre grupos (cl. 10, nota)
+  gradoGrupo  String?
+
+  // CALCULATED -- condiciones de Tabla 2 para el grado determinado.
+  // Referencia del informe, NO ingresadas por el operador.
+  esferasCount      Int?
+  esferasMassG      Float?
+  revolucionesCount Int?
+
+  // INPUT operador (simbolos de la norma, cl. 8.1/8.8)
+  masaInicial Float // mi -- masa de la carga de ensayo antes de la maquina, aprox 1g
+  masaFinal   Float // mf -- masa retenida en tamiz 1,68mm despues, aprox 1g
+
+  // CALCULATED -- P = (mi - mf)/mi * 100, cl. 9, aprox al entero (cl. 10)
+  desgastePercent Int?
+
+  calcNote String?
+
+  isApproved   Boolean   @default(false)
+  approvedById Int?
+  approvedAt   DateTime?
+  approvedBy   User?     @relation("LosAngelesAbrasionApprovedBy", fields: [approvedById], references: [id])
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sourceSieves LosAngelesAbrasionSieve[]
+  fractions    LosAngelesAbrasionFraction[]
+
+  @@index([sampleId])
+}
+
+// Dataset 1: granulometria de ORIGEN (11 tamices fijos, cl. 7.2), solo
+// para determinar el grado via Anexo A -- NO se valida contra Tabla 1.
+model LosAngelesAbrasionSieve {
+  id                   Int                @id @default(autoincrement())
+  losAngelesAbrasionId Int
+  losAngelesAbrasion   LosAngelesAbrasion @relation(fields: [losAngelesAbrasionId], references: [id], onDelete: Cascade)
+
+  order     Int   // 1..11, descendente por abertura
+  openingMm Float // serie cl. 7.2: 75,63,50,37.5,25,19,12.5,9.5,6.3,4.75,2.36
+
+  retainedMass Float // masa retenida (g), muestra de origen
+
+  // CALCULATED -- % del total de esta granulometria de origen (Anexo A)
+  percentRetained Float
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([losAngelesAbrasionId, order])
+  @@index([losAngelesAbrasionId])
+}
+
+// Dataset 2: masas de la CARGA DE ENSAYO preparada segun Tabla 1 para
+// el grado ya determinado (1 a 4 filas segun el grado). Bloqueante.
+model LosAngelesAbrasionFraction {
+  id                   Int                @id @default(autoincrement())
+  losAngelesAbrasionId Int
+  losAngelesAbrasion   LosAngelesAbrasion @relation(fields: [losAngelesAbrasionId], references: [id], onDelete: Cascade)
+
+  order          Int    // orden dentro del grado, descendente por abertura
+  fractionLabel  String // ej. "37,5-25"
+  upperOpeningMm Float
+  lowerOpeningMm Float
+  massG          Float  // masa pesada de esta fraccion para la carga de ensayo
+
+  // CALCULATED -- referencia de Tabla 1 para el grado determinado
+  targetMassG Float
+  toleranceG  Float
+  diffG       Float
+  ok          Boolean
+
+  createdAt DateTime @default(now())
+
+  @@unique([losAngelesAbrasionId, order])
+  @@index([losAngelesAbrasionId])
 }
