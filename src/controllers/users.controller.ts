@@ -84,7 +84,7 @@ export const createUser = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const validRoles = ["ADMIN", "JEFE", "LABORATORISTA", "CALIDAD", "AUDITOR"];
+    const validRoles = ["ADMIN", "JEFE", "LABORATORISTA", "CALIDAD", "AUDITOR", "CLIENTE"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         message: `role debe ser uno de: ${validRoles.join(", ")}`,
@@ -163,7 +163,7 @@ export const updateUserRole = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const validRoles = ["ADMIN", "JEFE", "LABORATORISTA", "CALIDAD", "AUDITOR"];
+    const validRoles = ["ADMIN", "JEFE", "LABORATORISTA", "CALIDAD", "AUDITOR", "CLIENTE"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({
         message: `role debe ser uno de: ${validRoles.join(", ")}`,

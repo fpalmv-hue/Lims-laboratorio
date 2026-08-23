@@ -20,6 +20,7 @@ enum UserRole {
   LABORATORISTA
   CALIDAD
   AUDITOR
+  CLIENTE
 }
 
 enum TestStatus {
@@ -223,6 +224,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Fase 7: solo se usa cuando role = CLIENTE. Nullable porque el resto
+  // de los roles (ADMIN/JEFE/LABORATORISTA/CALIDAD/AUDITOR) son personal
+  // interno del laboratorio, sin Cliente asociado.
+  clienteId String?
+  cliente   Cliente? @relation(fields: [clienteId], references: [id])
+
   // Relaciones
   assignedSamples   Sample[]           @relation("SampleAssignedTo")
   auditLogs         AuditLog[]
@@ -247,6 +254,26 @@ model User {
   approvedGravelDensities         GravelDensity[]         @relation("GravelDensityApprovedBy")
   approvedAggregateGranulometries AggregateGranulometry[] @relation("AggregateGranulometryApprovedBy")
   approvedLosAngelesAbrasions     LosAngelesAbrasion[]    @relation("LosAngelesAbrasionApprovedBy")
+}
+
+//
+// ─────────────────────────────────────
+//   CLIENTE (Fase 7: base de autenticación/roles y futuro portal cliente,
+//   Fase 9. Sin lógica de estado de cuenta / seguimiento todavía -- solo
+//   el flag manual y las relaciones. Order NO se toca ni se vincula acá,
+//   queda desconectado por decisión explícita del 22-ago-2026.)
+// ─────────────────────────────────────
+//
+
+model Cliente {
+  id                String   @id @default(cuid())
+  nombre            String
+  estadoCuentaAlDia Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  usuarios User[]
+  samples  Sample[]
 }
 
 //
@@ -276,6 +303,11 @@ model Sample {
   // Asignación (opcional)
   assignedToId Int?
   assignedTo   User? @relation("SampleAssignedTo", fields: [assignedToId], references: [id])
+
+  // Fase 7: cliente dueño de la muestra (nullable -- las Sample existentes
+  // no tienen cliente asignado retroactivamente, ver decisión 22-ago-2026).
+  clienteId String?
+  cliente   Cliente? @relation(fields: [clienteId], references: [id])
 
   // relaciones 1:1 (por muestra)
   atterberg Atterberg?
@@ -473,7 +505,10 @@ model AuditLog {
   userId        Int
   action        AuditAction
   entityType    String
-  entityId      Int
+  // String (no Int): Fase 7 introduce Cliente con id cuid. Los IDs
+  // numéricos del resto de las entidades se guardan como texto
+  // ("123"), sin pérdida de trazabilidad -- ver decisión 22-ago-2026.
+  entityId      String
   previousValue Json?
   newValue      Json?
   reason        String?

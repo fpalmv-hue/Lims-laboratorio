@@ -25,8 +25,11 @@ import { AuditAction } from "../generated/prisma";
 interface RegisterAuditParams {
   userId: number;
   action: AuditAction;
-  entityType: string; // "TestResult" | "Mold" | "User" | "Document" | etc.
-  entityId: number;
+  entityType: string; // "TestResult" | "Mold" | "User" | "Document" | "Cliente" | etc.
+  // number para entidades con id autoincremental (la mayoría), string
+  // para entidades con id cuid (ej. Cliente, Fase 7). Se persiste como
+  // texto en AuditLog.entityId en ambos casos.
+  entityId: number | string;
   previousValue?: unknown;
   newValue?: unknown;
   reason?: string;
@@ -39,7 +42,7 @@ export async function registerAudit(params: RegisterAuditParams): Promise<void> 
         userId: params.userId,
         action: params.action,
         entityType: params.entityType,
-        entityId: params.entityId,
+        entityId: String(params.entityId),
         previousValue: params.previousValue as any,
         newValue: params.newValue as any,
         reason: params.reason,

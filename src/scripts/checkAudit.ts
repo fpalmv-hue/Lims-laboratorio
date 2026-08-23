@@ -4,9 +4,9 @@ import prisma from "../prismaClient";
 
 async function main() {
   const entityType = process.argv[2];
-  const entityId = Number(process.argv[3]);
+  const entityId = process.argv[3];
 
-  if (!entityType || !Number.isFinite(entityId)) {
+  if (!entityType || !entityId) {
     console.error("Uso: npx ts-node src/scripts/checkAudit.ts <entityType> <entityId>");
     process.exit(1);
   }
